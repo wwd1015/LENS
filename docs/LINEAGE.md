@@ -1,5 +1,7 @@
 # LINEAGE.yaml — schema reference
 
+> **Status:** v1 — used by the `/triage-data` skill. For v2 LENS Surveillance, the structured knowledge moved into the `lens-wiki/` markdown tree (`datasets/`, `rules/`, `lineage/`). Both formats coexist: `/triage-data` reads `LINEAGE.yaml`; the v2 orchestrator + `/lens-rca` skill read `lens-wiki/`. New work should target `lens-wiki/`; this doc remains the authoritative reference for the v1 skill.
+
 `LINEAGE.yaml` declares the datasets that `/triage-data` knows about, their upstreams, and the code that produces them. The skill is project-agnostic; **all dataset-specific knowledge lives here**, not in the skill prompt.
 
 This mirrors Deputy's `projects/<name>.yaml` separation: agents/skills are project-agnostic prompts; project knowledge is data the skill reads at runtime.
