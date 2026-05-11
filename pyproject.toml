@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lens-dq"
+version = "0.1.0"
+description = "LENS: Longitudinal & Entity-level Normative Surveillance — a data quality control tool for commercial lending"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Alan" }]
+
+dependencies = [
+    "polars>=1.0",
+    "pyyaml>=6.0",
+    "jinja2>=3.1",
+    "statsmodels>=0.14",
+]
+
+[project.optional-dependencies]
+snowflake = ["snowflake-connector-python>=3.0", "polars[connectorx]"]
+tabpfn = ["tabpfn-time-series", "torch"]
+all = ["lens-dq[snowflake,tabpfn]"]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.4",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lens"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "eval: real-LLM evals, requires LENS_RUN_EVAL=1, excluded from default CI",
+]

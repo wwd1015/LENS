@@ -1,0 +1,14 @@
+# Lineage fragment for senior_debt
+# Mirrors the schema LENS will expect in lens-wiki/lineage/*.lineage.md frontmatter
+
+senior_debt:
+  upstream:
+    - table: loan_pool
+      via: tests/eval/fixtures/code_senior_debt.sql
+      relationship: aggregation_by_deal_id_with_status_filter
+    - table: deal_terms
+      via: tests/eval/fixtures/code_senior_debt.sql
+      relationship: one_to_one_by_deal_id_and_date
+  downstream: []
+  producing_code:
+    - tests/eval/fixtures/code_senior_debt.sql
