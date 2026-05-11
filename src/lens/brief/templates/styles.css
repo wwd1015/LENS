@@ -1,0 +1,246 @@
+/* LENS morning brief — light theme, minimal styling.
+ *
+ * Sans-serif for prose, monospace for dense identifiers (entity IDs,
+ * field names, snapshot dates). Severity badges use a flat color scheme;
+ * the confidence bar is a simple flexbox bar.
+ */
+
+:root {
+    --bg: #fafafa;
+    --fg: #1a1a1a;
+    --fg-muted: #555;
+    --card-bg: #ffffff;
+    --card-border: #e3e3e3;
+    --group-border: #d0d0d0;
+    --sev-critical: #c62828;
+    --sev-error: #ef6c00;
+    --sev-warning: #f9a825;
+    --sev-info: #1565c0;
+    --confidence-bg: #eceff1;
+    --confidence-fill: #455a64;
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    padding: 1.5rem 2rem 3rem 2rem;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.45;
+    max-width: 1100px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+code, .mono, .entity, .field, .snapshot {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.9em;
+}
+
+h1 {
+    margin: 0 0 0.25rem 0;
+    font-size: 1.4rem;
+    font-weight: 600;
+}
+
+.subtitle {
+    color: var(--fg-muted);
+    margin-bottom: 1rem;
+}
+
+.summary-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+    margin: 0.5rem 0 1rem 0;
+}
+
+.badge {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 3px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: white;
+}
+
+.badge-critical { background: var(--sev-critical); }
+.badge-error    { background: var(--sev-error); }
+.badge-warning  { background: var(--sev-warning); color: #222; }
+.badge-info     { background: var(--sev-info); }
+
+.delta-badge {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 3px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    background: #eceff1;
+    color: #263238;
+}
+
+.delta-new       { background: #c8e6c9; color: #1b5e20; }
+.delta-resolved  { background: #ffcdd2; color: #b71c1c; }
+.delta-ongoing   { background: #eceff1; color: #263238; }
+
+.filter-bar {
+    display: flex;
+    gap: 0.5rem;
+    margin: 1rem 0;
+    flex-wrap: wrap;
+}
+
+.filter-bar button {
+    background: white;
+    border: 1px solid var(--card-border);
+    padding: 0.3rem 0.7rem;
+    cursor: pointer;
+    font-size: 0.85rem;
+    border-radius: 3px;
+}
+
+.filter-bar button.active {
+    background: #263238;
+    color: white;
+    border-color: #263238;
+}
+
+.cap-notice {
+    background: #fff8e1;
+    border: 1px solid #ffe082;
+    padding: 0.5rem 0.75rem;
+    border-radius: 3px;
+    font-size: 0.85rem;
+    margin: 0.5rem 0 1rem 0;
+}
+
+.empty-state {
+    text-align: center;
+    padding: 4rem 1rem;
+    color: var(--fg-muted);
+}
+
+.empty-state .big {
+    font-size: 1.4rem;
+    margin-bottom: 0.5rem;
+    color: var(--fg);
+}
+
+.group {
+    margin: 1.5rem 0;
+    padding-top: 1rem;
+    border-top: 1px solid var(--group-border);
+}
+
+.group-heading {
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.group-count {
+    color: var(--fg-muted);
+    font-weight: 400;
+    font-size: 0.85rem;
+}
+
+.card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 4px;
+    padding: 0.75rem 1rem;
+    margin: 0.5rem 0;
+}
+
+.card-head {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.4rem;
+}
+
+.confidence {
+    flex: 1;
+    min-width: 120px;
+    max-width: 240px;
+    background: var(--confidence-bg);
+    border-radius: 3px;
+    height: 6px;
+    overflow: hidden;
+}
+
+.confidence .bar {
+    height: 100%;
+    background: var(--confidence-fill);
+}
+
+.card-summary {
+    color: var(--fg-muted);
+    font-size: 0.9rem;
+    margin: 0.25rem 0;
+}
+
+.card-summary .entity,
+.card-summary .field,
+.card-summary .snapshot {
+    color: var(--fg);
+}
+
+.card-description {
+    margin: 0.5rem 0;
+    white-space: pre-wrap;
+}
+
+.card details {
+    margin-top: 0.5rem;
+}
+
+.card details summary {
+    cursor: pointer;
+    color: var(--fg-muted);
+    font-size: 0.85rem;
+}
+
+.rca-block {
+    margin-top: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background: #f5f7fa;
+    border-radius: 3px;
+}
+
+.rca-hypothesis {
+    margin: 0 0 0.5rem 0;
+    white-space: pre-wrap;
+}
+
+.rca-evidence,
+.rca-references {
+    margin: 0.25rem 0 0.25rem 0;
+    padding-left: 1.25rem;
+}
+
+.rca-references a {
+    color: var(--sev-info);
+    text-decoration: none;
+}
+
+.rca-references a:hover {
+    text-decoration: underline;
+}
+
+/* Severity filter classes — added to <body> by the inline JS. Each disables
+ * one severity bucket. "Show only X" = enable X, disable everything else. */
+.hide-info .severity-info       { display: none; }
+.hide-warning .severity-warning { display: none; }
+.hide-error .severity-error     { display: none; }
+.hide-critical .severity-critical { display: none; }

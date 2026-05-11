@@ -1,0 +1,163 @@
+{#-
+  LENS morning brief template.
+
+  SECURITY NOTE: This template is rendered with autoescape enabled
+  (see lens.brief.html.render_brief). Every variable interpolation
+  except the styles_inline below is escaped. The `| safe` on
+  `styles_inline` is intentional — that string comes from a
+  developer-controlled file (styles.css), never from user/LLM input.
+-#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>LENS Brief — {{ date_iso }}</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+  <style>{{ styles_inline | safe }}</style>
+</head>
+<body>
+  <header>
+    <h1>LENS Morning Brief</h1>
+    <div class="subtitle">
+      {% if dataset_label %}<span class="mono">{{ dataset_label }}</span> &middot; {% endif -%}
+      {{ date_iso }} &middot; {{ total_findings }} finding{% if total_findings != 1 %}s{% endif %}
+    </div>
+
+    <div class="summary-row">
+      {% if summary_counts.get("critical", 0) > 0 %}
+        <span class="badge badge-critical">{{ summary_counts["critical"] }} critical</span>
+      {% endif %}
+      {% if summary_counts.get("error", 0) > 0 %}
+        <span class="badge badge-error">{{ summary_counts["error"] }} error</span>
+      {% endif %}
+      {% if summary_counts.get("warning", 0) > 0 %}
+        <span class="badge badge-warning">{{ summary_counts["warning"] }} warning</span>
+      {% endif %}
+      {% if summary_counts.get("info", 0) > 0 %}
+        <span class="badge badge-info">{{ summary_counts["info"] }} info</span>
+      {% endif %}
+
+      {% if delta_counts %}
+        <span class="delta-badge delta-new">+{{ delta_counts.new }} new</span>
+        <span class="delta-badge delta-resolved">-{{ delta_counts.resolved }} resolved</span>
+        <span class="delta-badge delta-ongoing">={{ delta_counts.ongoing }} ongoing</span>
+      {% endif %}
+    </div>
+
+    {% if cap_applied %}
+      <div class="cap-notice">
+        showing top {{ max_findings }} of {{ total_findings }} — see findings.json for the full list
+      </div>
+    {% endif %}
+
+    {% if total_findings > 0 %}
+    <div class="filter-bar" id="severity-filter">
+      <button data-filter="all" class="active">Show all</button>
+      <button data-filter="critical">Only critical</button>
+      <button data-filter="error">Only error</button>
+      <button data-filter="warning">Only warning</button>
+      <button data-filter="info">Only info</button>
+    </div>
+    {% endif %}
+  </header>
+
+  <main>
+    {% if total_findings == 0 %}
+      <div class="empty-state">
+        <div class="big">All quiet — no findings on this run.</div>
+        <div>Last run: {{ date_iso }}</div>
+      </div>
+    {% else %}
+      {% for group in groups %}
+        <section class="group">
+          <div class="group-heading">
+            <span>{{ group.label }}</span>
+            <span class="group-count">{{ group.total_in_group }} finding{% if group.total_in_group != 1 %}s{% endif %}</span>
+          </div>
+
+          {% for f in group.findings_in_group %}
+            <article class="card severity-{{ f.severity }}" data-severity="{{ f.severity }}">
+              <div class="card-head">
+                <span class="badge badge-{{ f.severity }}">{{ f.severity_upper }}</span>
+                <div class="confidence" title="confidence {{ (f.confidence * 100) | round(1) }}%">
+                  <div class="bar" style="width: {{ (f.confidence * 100) | round(1) }}%"></div>
+                </div>
+                {% if f.detector_sources %}
+                  <span class="mono" style="color: var(--fg-muted); font-size: 0.8rem;">
+                    {{ f.detector_sources | join(", ") }}
+                  </span>
+                {% endif %}
+              </div>
+
+              <div class="card-summary">
+                {% if f.entity_id %}<span class="entity">{{ f.entity_id }}</span>{% endif %}
+                {% if f.field_name %} &middot; <span class="field">{{ f.field_name }}</span>{% endif %}
+                {% if f.snapshot_date %} &middot; <span class="snapshot">{{ f.snapshot_date }}</span>{% endif %}
+              </div>
+
+              {% if f.description %}
+                <div class="card-description">{{ f.description }}</div>
+              {% endif %}
+
+              {% if f.rca %}
+                <details>
+                  <summary>RCA hypothesis (confidence {{ (f.rca.confidence * 100) | round(1) }}%)</summary>
+                  <div class="rca-block">
+                    <p class="rca-hypothesis">{{ f.rca.hypothesis }}</p>
+                    {% if f.rca.evidence %}
+                      <strong>Evidence:</strong>
+                      <ul class="rca-evidence">
+                        {% for e in f.rca.evidence %}<li>{{ e }}</li>{% endfor %}
+                      </ul>
+                    {% endif %}
+                    {% if f.rca.references %}
+                      <strong>References:</strong>
+                      <ul class="rca-references">
+                        {% for r in f.rca.references %}
+                          <li>
+                            {% if r.startswith("http://") or r.startswith("https://") %}
+                              <a href="{{ r }}" target="_blank" rel="noopener noreferrer">{{ r }}</a>
+                            {% else %}
+                              <span class="mono">{{ r }}</span>
+                            {% endif %}
+                          </li>
+                        {% endfor %}
+                      </ul>
+                    {% endif %}
+                  </div>
+                </details>
+              {% endif %}
+            </article>
+          {% endfor %}
+        </section>
+      {% endfor %}
+    {% endif %}
+  </main>
+
+  <script>
+    // Severity filter. Toggles hide-* classes on <body>; CSS does the rest.
+    (function () {
+      var bar = document.getElementById("severity-filter");
+      if (!bar) return;
+      var ALL = ["critical", "error", "warning", "info"];
+      function applyFilter(target) {
+        ALL.forEach(function (sev) {
+          document.body.classList.remove("hide-" + sev);
+        });
+        if (target !== "all") {
+          ALL.forEach(function (sev) {
+            if (sev !== target) document.body.classList.add("hide-" + sev);
+          });
+        }
+        Array.prototype.forEach.call(bar.querySelectorAll("button"), function (b) {
+          b.classList.toggle("active", b.getAttribute("data-filter") === target);
+        });
+      }
+      bar.addEventListener("click", function (e) {
+        var t = e.target;
+        if (t && t.tagName === "BUTTON") applyFilter(t.getAttribute("data-filter"));
+      });
+    })();
+  </script>
+</body>
+</html>
