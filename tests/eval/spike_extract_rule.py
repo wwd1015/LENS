@@ -1,8 +1,11 @@
 """T2.5 spike — rule-extraction gate.
 
 One-shot script (not a pytest). Run manually with `LENS_RUN_EVAL=1`. It
-prompts an LLM to extract a structured rule from the fixture SQL+lineage and
+prompts the LLM to extract a structured rule from the fixture SQL+lineage and
 compares the result to the hand-authored ground-truth page.
+
+LLM access goes through Claude Code headless mode (`claude -p "..."`) because
+this environment authenticates via Claude Code SSO — no Anthropic API key.
 
 Outcomes:
     PASS  → T4 scopes to full LLM-driven ingestion worker.
@@ -10,12 +13,13 @@ Outcomes:
             deferred to v2.1. Document the decision in lens-wiki/index.md.
 
 Usage:
-    LENS_RUN_EVAL=1 ANTHROPIC_API_KEY=... python tests/eval/spike_extract_rule.py
+    LENS_RUN_EVAL=1 python tests/eval/spike_extract_rule.py
 """
 
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -104,25 +108,30 @@ def main() -> int:
               "with hand-authored fallback path retained in T4.")
         return 0
 
-    try:
-        from anthropic import Anthropic  # type: ignore
-    except ImportError:
-        print("FAIL: anthropic SDK not installed. `pip install anthropic` and retry.")
-        return 2
-
     sql = _read(SQL_PATH)
     lineage = _read(LINEAGE_PATH)
     schema_example = _read(GROUND_TRUTH)
 
     prompt = PROMPT.format(sql=sql, lineage=lineage, schema_example=schema_example)
 
-    client = Anthropic()
-    response = client.messages.create(
-        model="claude-opus-4-7",
-        max_tokens=2000,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    text = "".join(block.text for block in response.content if block.type == "text")
+    try:
+        result = subprocess.run(
+            ["claude", "-p", prompt, "--output-format", "text"],
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=True,
+        )
+    except FileNotFoundError:
+        print("FAIL: `claude` not on PATH. Install Claude Code to run this spike.")
+        return 2
+    except subprocess.CalledProcessError as e:
+        print(f"FAIL: claude headless run failed (rc={e.returncode}): {e.stderr.strip()}")
+        return 2
+    except subprocess.TimeoutExpired:
+        print("FAIL: claude headless run timed out.")
+        return 2
+    text = result.stdout
 
     try:
         actual_fm = _extract_frontmatter(text)

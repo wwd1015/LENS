@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import re
 import shutil
+import subprocess
 import time
 from pathlib import Path
 from typing import Protocol
@@ -40,40 +41,63 @@ class LLMClient(Protocol):
         ...
 
 
-class AnthropicClient:
-    """Default `LLMClient` implementation backed by the Anthropic SDK.
+class ClaudeCodeClient:
+    """Default `LLMClient` implementation backed by Claude Code headless mode.
 
-    Lazily imports `anthropic` so the dependency is optional at install time
-    (tests use a stub and never touch this class). Mirrors the call shape used
-    in `tests/eval/spike_extract_rule.py`.
+    LENS runs in environments where the only available authentication is the
+    user's Claude Code SSO session — there is no Anthropic API key. To use that
+    session, this client shells out to `claude -p "<prompt>" --output-format text`
+    as a subprocess and reads stdout. Tests use a stub and never invoke this
+    class.
+
+    Parameters
+    ----------
+    executable:
+        Path to the `claude` binary. Defaults to whichever `claude` is on PATH.
+    timeout_s:
+        Subprocess timeout in seconds.
+    extra_args:
+        Optional list of additional flags passed to `claude` (e.g.
+        `--model claude-opus-4-7`). The prompt and `--output-format text` are
+        always appended.
     """
 
     def __init__(
         self,
-        model: str = "claude-opus-4-7",
-        max_tokens: int = 2000,
+        executable: str = "claude",
+        timeout_s: int = 180,
+        extra_args: list[str] | None = None,
     ) -> None:
-        self.model = model
-        self.max_tokens = max_tokens
-        self._client = None  # lazy
-
-    def _ensure_client(self):
-        if self._client is None:
-            from anthropic import Anthropic  # type: ignore
-
-            self._client = Anthropic()
-        return self._client
+        self.executable = executable
+        self.timeout_s = timeout_s
+        self.extra_args = list(extra_args or [])
 
     def complete(self, prompt: str) -> str:
-        client = self._ensure_client()
-        response = client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return "".join(
-            block.text for block in response.content if block.type == "text"
-        )
+        cmd = [self.executable, "-p", prompt, "--output-format", "text"]
+        if self.extra_args:
+            cmd.extend(self.extra_args)
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_s,
+                check=True,
+            )
+        except FileNotFoundError as e:
+            raise RuntimeError(
+                f"`{self.executable}` not on PATH; install Claude Code or set "
+                f"`executable=` on ClaudeCodeClient"
+            ) from e
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(
+                f"claude headless run failed (rc={e.returncode}): {e.stderr.strip()}"
+            ) from e
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError(
+                f"claude headless run timed out after {self.timeout_s}s"
+            ) from e
+        return result.stdout
 
 
 def _slugify(name: str) -> str:
@@ -130,7 +154,9 @@ class IngestionWorker:
         Absolute path to the `lens-wiki/` directory. Pages are written under
         `wiki_root/rules/`.
     client:
-        An `LLMClient`. Defaults to `AnthropicClient()`; tests pass a stub.
+        An `LLMClient`. Defaults to `ClaudeCodeClient()` (shells out to the
+        `claude` CLI in headless mode, using the user's existing Claude Code
+        SSO session — no API key required). Tests pass a stub.
     max_retries:
         How many times to retry the LLM on transient failure (exception or
         unparseable response). Retries with a small linear back-off; tests
@@ -146,7 +172,7 @@ class IngestionWorker:
     ) -> None:
         self.repo_root = Path(repo_root)
         self.wiki_root = Path(wiki_root)
-        self.client = client if client is not None else AnthropicClient()
+        self.client = client if client is not None else ClaudeCodeClient()
         self.max_retries = max_retries
 
     def _read_schema_example(self) -> str:
