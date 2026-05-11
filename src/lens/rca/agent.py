@@ -101,16 +101,32 @@ def _sample_rows(
 
     All polars failures are swallowed and degrade to empty lists — RCA must
     not crash because the analyst's sample query was malformed.
+
+    Filters are pushed into the LazyFrame BEFORE ``.collect()`` so production-
+    sized sources don't materialize their full row set just to sample a
+    handful around one snapshot. Schema inspection uses ``lf.collect_schema()``
+    which doesn't trigger materialization.
     """
     try:
-        df = lf.collect()
-    except Exception as exc:  # noqa: BLE001 - best-effort sampling
-        logger.debug("rca: could not materialize source for sampling: %s", exc)
+        cols = lf.collect_schema().names()
+    except Exception as exc:  # noqa: BLE001 - schema probe best-effort
+        logger.debug("rca: could not inspect source schema: %s", exc)
         return [], []
 
-    cols = df.columns
     have_snapshot = snapshot_col in cols
     have_entity = entity_col in cols and entity_id is not None
+
+    # Push filters BEFORE materialization. The anomalous and contrast slices
+    # each materialize at most `n` rows.
+    base = lf
+    if have_entity:
+        base = base.filter(pl.col(entity_col) == entity_id)
+
+    try:
+        df = base.collect()
+    except Exception as exc:  # noqa: BLE001 - best-effort sampling
+        logger.debug("rca: could not materialize filtered source: %s", exc)
+        return [], []
 
     anomalous: list[dict[str, Any]] = []
     contrast: list[dict[str, Any]] = []

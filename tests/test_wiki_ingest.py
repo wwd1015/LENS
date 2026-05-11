@@ -85,6 +85,22 @@ def test_is_safe_to_send_accepts_normal_sql():
     assert is_safe_to_send(p, REPO_ROOT) is True
 
 
+def test_is_safe_to_send_rejects_modern_credential_shapes(tmp_path):
+    """Code-review P1 #2: content-regex layer must catch modern token shapes
+    beyond AWS keys — OpenAI sk-, GitHub PATs (ghp_/gho_/...), Slack
+    xox[abprs]-, and JWTs (eyJ...)."""
+    cases = {
+        "openai.txt": "openai_token = sk-abcdefghij1234567890ABCDEFGHIJ",
+        "github.txt": "ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "slack.txt": "SLACK=xoxb-1234567890-1234567890-abcdef",
+        "jwt.txt": "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NSJ9.abc123signature",
+    }
+    for fname, content in cases.items():
+        p = tmp_path / fname
+        p.write_text(content)
+        assert is_safe_to_send(p, tmp_path) is False, f"{fname} should be rejected"
+
+
 def test_assert_safe_to_send_raises_on_unsafe():
     """`assert_safe_to_send` raises `UnsafePathError` (not returns False)."""
     p = FIXTURES / ".env.test"

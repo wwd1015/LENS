@@ -52,6 +52,16 @@ _SECRET_CONTENT_REGEXES: list[re.Pattern[str]] = [
     re.compile(
         r"(?i)(api[_-]?key|password|secret)[\s:=]+['\"]?[A-Za-z0-9_/+=-]{16,}"
     ),
+    # OpenAI keys: `sk-` followed by ≥20 base64-ish chars.
+    re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
+    # GitHub personal-access / fine-grained tokens: `ghp_`, `gho_`, `ghu_`,
+    # `ghs_`, `ghr_` prefixes with ≥30 base64-ish chars.
+    re.compile(r"\bgh[opusr]_[A-Za-z0-9]{30,}\b"),
+    # Slack bot/user/app tokens: `xox[abprs]-` followed by digits and base64-ish.
+    re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}\b"),
+    # JWTs: three base64url segments separated by dots, starting with `eyJ`
+    # (decodes to `{"`). Catches OIDC/JWT bearer tokens.
+    re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
 ]
 """Regexes matched against file content; any hit fails the safety check."""
 

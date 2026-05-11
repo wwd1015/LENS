@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 from uuid import UUID, uuid5
 
@@ -23,15 +23,24 @@ class Severity(enum.Enum):
 def compute_finding_id(
     entity_id: str | None,
     field_name: str | None,
-    snapshot_date: datetime | None,
+    snapshot_date: date | datetime | None,
 ) -> str:
     """Deterministic finding_id for dedup across detectors.
 
     Per spec §6, dedup key is (entity_id, field_name, snapshot_date) — detector
     source is intentionally excluded so the same point flagged by multiple
     detectors collapses into one Finding.
+
+    `snapshot_date` is normalized to its `date` part before keying so a
+    Polars source returning `datetime` and a CSV source returning `date`
+    produce the same finding_id for the same logical day.
     """
-    date_part = snapshot_date.isoformat() if snapshot_date is not None else ""
+    if isinstance(snapshot_date, datetime):
+        date_part = snapshot_date.date().isoformat()
+    elif isinstance(snapshot_date, date):
+        date_part = snapshot_date.isoformat()
+    else:
+        date_part = ""
     key = f"{entity_id or ''}|{field_name or ''}|{date_part}"
     return str(uuid5(LENS_FINDING_NAMESPACE, key))
 

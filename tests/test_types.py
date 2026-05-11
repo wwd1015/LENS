@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import datetime
+from datetime import date, datetime
 
 from lens.types import (
     LENS_FINDING_NAMESPACE,
@@ -65,6 +65,20 @@ def test_finding_id_handles_none_components():
     # Should not crash
     fid = compute_finding_id(None, None, None)
     assert isinstance(fid, str) and len(fid) == 36
+
+
+def test_finding_id_date_and_datetime_same_day_collide():
+    """Code-review P1 #1: snapshot dates from a CSV source (`date`) and from
+    a Polars source (`datetime`) for the same logical day must collapse to
+    the same finding_id — otherwise the orchestrator double-emits."""
+    as_date = compute_finding_id("L1", "balance", date(2024, 1, 1))
+    as_datetime_midnight = compute_finding_id(
+        "L1", "balance", datetime(2024, 1, 1, 0, 0, 0)
+    )
+    as_datetime_midafternoon = compute_finding_id(
+        "L1", "balance", datetime(2024, 1, 1, 14, 30, 12)
+    )
+    assert as_date == as_datetime_midnight == as_datetime_midafternoon
 
 
 def test_issue_backward_compat_default_fields():
