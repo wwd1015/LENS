@@ -1,0 +1,11 @@
+{
+  "event_driven": {
+    "anomaly_index": 60
+  },
+  "seasonal": {
+    "anomaly_index": 50
+  },
+  "mixed": {
+    "anomaly_index": 45
+  }
+}
