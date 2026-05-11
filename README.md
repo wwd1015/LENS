@@ -4,9 +4,8 @@ A data-quality surveillance tool for commercial lending data, built on Polars.
 
 LENS layers above whatever rule-based DQ your production pipelines already enforce. It catches the harder class of issues those rules miss:
 
-- **Longitudinal anomalies** — values in-range on a snapshot but the trajectory over an entity's history is wrong.
-- **Cross-source mismatches** — derived from lineage + production-code logic. E.g. *senior debt balance = sum(loan-pool balances) × advance rate* — that relationship lives in production SQL, not in any DQ rulebook.
-- **Top-down drill-down** — start at the portfolio level, narrow into the segment, then the entity.
+- **Longitudinal anomalies** — values in-range on a snapshot but the trajectory over an entity's history is wrong. STL-residual and TabPFN-TS detectors.
+- **Cross-source mismatches** — derived from lineage + production-code logic. E.g. *senior debt balance = sum(loan-pool balances) × advance rate* — that relationship lives in production SQL, not in any DQ rulebook. The `cross_source_wiki` detector reads structured equations from `lens-wiki/rules/`.
 
 Every flagged finding gets a **severity** + **confidence**, plus a structured **root-cause hypothesis** (lineage walked, recent commits inspected, contrast rows sampled). Output is an interactive HTML brief, a Slack-pasteable markdown digest, or an ad-hoc per-finding investigation via the `/lens-rca` Claude Code skill.
 
@@ -134,6 +133,15 @@ LENS_RUN_EVAL=1 pytest -m eval               # real-LLM evals: rule extraction, 
 ```
 
 The `eval` marker is registered in `pyproject.toml`. Tests marked `@pytest.mark.eval` either need the real LLM (skip without `LENS_RUN_EVAL=1`) or run computational comparisons that are slow enough to defer.
+
+## Roadmap — not yet implemented
+
+These were considered for the initial build and explicitly deferred. The wiki schema reserves space for them so the data model doesn't have to change later.
+
+- **Top-down hierarchical drill-down** — start at the portfolio aggregate, recursively narrow into segments (deal type, origination quarter, etc.) when the aggregate looks anomalous, surface only the leaf finding plus the path. Today, detectors run entity-by-entity in parallel and the orchestrator emits one Finding per `(entity_id, field_name, snapshot_date)`; nothing aggregates upward or drills downward. `DatasetPage.segments` in the wiki captures the dimensions a drill-down detector *would* search, but no detector reads them yet.
+- **Severity calibration loop** — `feedback.jsonl` records analyst `[real | false_positive | needs_more]` labels, but nothing reads it back into `scoring.py` thresholds. Calibration is a follow-up job, not part of the surveillance pipeline today.
+- **LLM-judged ensemble for the TS detector pool** — the orchestrator runs detectors independently and dedupes overlaps; it does not score-combine TS detectors. `tests/eval/test_ts_ensemble.py` exercises a vote-based ensemble outside the orchestrator to validate the design, but the runtime ships without it.
+- **Auto-extraction of rule pages** — `IngestionWorker` exists and the rule-extraction spike script is in place, but until the `LENS_RUN_EVAL=1` gate is run against your real production code, `lens-wiki/rules/*.md` should be treated as hand-authored.
 
 ## Architecture
 

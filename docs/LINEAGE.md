@@ -1,10 +1,22 @@
 # LINEAGE.yaml — schema reference
 
-> **Used by:** the `/triage-data` skill. The orchestrator pipeline and `/lens-rca` skill read structured knowledge from the `lens-wiki/` markdown tree (`datasets/`, `rules/`, `lineage/`) instead. Both formats coexist by design — pick whichever fits the workflow.
+## Scope
 
-`LINEAGE.yaml` declares the datasets that `/triage-data` knows about, their upstreams, and the code that produces them. The skill is project-agnostic; **all dataset-specific knowledge lives here**, not in the skill prompt.
+`LINEAGE.yaml` declares dataset knowledge for the **`/triage-data` Claude Code skill** — TabPFN-TS-based anomaly detection plus a single LLM reasoning trace that walks lineage and git history. It is read only by that skill.
 
-This mirrors Deputy's `projects/<name>.yaml` separation: agents/skills are project-agnostic prompts; project knowledge is data the skill reads at runtime.
+The **`DetectionOrchestrator` / `/lens-rca`** workflow does not read this file. It reads `lens-wiki/` (markdown pages) instead — different format, different consumer, different data model.
+
+### Which should I use?
+
+| | `LINEAGE.yaml` + `/triage-data` | `lens-wiki/` + orchestrator + `/lens-rca` |
+|---|---|---|
+| **Best for** | A quick spot-check of one dataset; "is this partition anomalous and why?" answered in one LLM trace | Scheduled / batch surveillance; multi-detector dedup; an HTML morning brief; ad-hoc per-finding RCA |
+| **Detection** | TabPFN-TS only | TabPFN-TS + STL + cross-source rule equations + pluggable detector pool |
+| **Cross-source rules** | Not modeled (this file describes lineage and producing code, not equations) | Yes — `lens-wiki/rules/*.md` with structured `equation` frontmatter |
+| **Output** | `ROOT_CAUSE.md` written in-place | `findings.{run_id}.json` + `LENS_brief.html` + optional `feedback.jsonl` |
+| **Knowledge source** | One YAML file at repo root | A tree of markdown pages under `lens-wiki/` |
+
+Both formats coexist — they answer different questions. Pick by workflow, not by recency.
 
 ## Location
 

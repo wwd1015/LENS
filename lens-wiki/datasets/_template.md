@@ -20,7 +20,7 @@ last_updated: <YYYY-MM-DD>
 <The unique key — `loan_id` or `deal_id`, etc. — and what "one row" means.>
 
 ## Segments
-<Dimensions analysts cut on (deal type, origination quarter, etc.). These shape the drill-down detector's search.>
+<Dimensions analysts cut on (deal type, origination quarter, etc.). Captured for a future drill-down detector; not consumed by any detector today.>
 
 ## Snapshot cadence
 <How often new partitions land.>
