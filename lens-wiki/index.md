@@ -15,13 +15,13 @@ This wiki is the source of truth for what LENS detectors check and how the RCA a
 - [`lineage/`](lineage/) — per-table upstream/downstream paths, with links to producing code.
 - [`changes/`](changes/) — commit-level summaries on producing code paths, populated by the ingestion worker on each detected change.
 
-## T2.5 spike decision
+## Rule-extraction spike
 
-`tests/eval/spike_extract_rule.py` is the gate. Run with `LENS_RUN_EVAL=1` to actually call the LLM.
+`tests/eval/spike_extract_rule.py` is the gate that decides whether the wiki ingestion worker ships with full LLM-driven auto-extraction or scopes down to a loader for hand-authored rules. Run with `LENS_RUN_EVAL=1` to actually call the LLM.
 
-- **Mode:** *default = proceed with full auto-extraction*. The spike script is in place; if it returns FAIL when first run, the wiki ingestion worker (T4) is rescoped to "load hand-authored rules from this directory" and the auto-extraction is deferred to v2.1.
-- **Date:** 2026-05-10 (script written; LLM run deferred until the project has API credentials configured)
-- **Fallback path:** `lens-wiki/rules/senior-debt-equals-pool-x-rate.md` is hand-authored and serves as both the spike's ground truth and the v1 fallback rule. The cross-source detector (T5) reads from this directory regardless of extraction mode.
+- **Default:** proceed with full auto-extraction. The spike script is in place; if it returns FAIL when first run, the ingestion worker (`lens.wiki.ingest.IngestionWorker`) is rescoped to use `load_hand_authored(...)` instead and auto-extraction is deferred.
+- **Status:** spike script written; LLM run deferred until the project is exercised end-to-end with Claude Code on real production code.
+- **Fallback path:** `lens-wiki/rules/senior-debt-equals-pool-x-rate.md` is hand-authored and serves as both the spike's ground truth and the canonical fallback rule. `CrossSourceWikiCheck` reads from this directory regardless of which extraction mode is active.
 
 ## Conventions
 

@@ -4,11 +4,11 @@ A data-quality surveillance tool for commercial lending data, built on Polars.
 
 LENS layers above whatever rule-based DQ your production pipelines already enforce. It catches the harder class of issues those rules miss:
 
-- **Longitudinal anomalies** — values that are in-range on a snapshot but the trajectory over an entity's history is wrong.
-- **Cross-source mismatches** — derived from lineage + production code logic, not hand-coded rules. E.g. *senior debt balance = sum(loan-pool balances) × advance rate* — that relationship lives in production SQL, not in any DQ rulebook.
+- **Longitudinal anomalies** — values in-range on a snapshot but the trajectory over an entity's history is wrong.
+- **Cross-source mismatches** — derived from lineage + production-code logic. E.g. *senior debt balance = sum(loan-pool balances) × advance rate* — that relationship lives in production SQL, not in any DQ rulebook.
 - **Top-down drill-down** — start at the portfolio level, narrow into the segment, then the entity.
 
-Every flagged finding gets a **severity** + **confidence**, plus a structured **root-cause hypothesis** (lineage walked, recent commits inspected, contrast rows sampled). The output is an interactive HTML brief — or a Slack-pasteable markdown digest, or an ad-hoc per-finding investigation via the `/lens-rca` Claude Code skill.
+Every flagged finding gets a **severity** + **confidence**, plus a structured **root-cause hypothesis** (lineage walked, recent commits inspected, contrast rows sampled). Output is an interactive HTML brief, a Slack-pasteable markdown digest, or an ad-hoc per-finding investigation via the `/lens-rca` Claude Code skill.
 
 ## Install
 
@@ -18,11 +18,9 @@ pip install -e ".[snowflake]"    # with Snowflake DataSource
 pip install -e ".[tabpfn]"       # with TabPFN-TS zero-shot anomaly detection
 ```
 
-## Two ways to use LENS
+## Quick start — inline rule-based suite
 
-### 1. v1 — single-suite rule-based checks (still supported)
-
-Useful when you just want to add a few in-line DQ checks to an existing pipeline:
+For pipelines that just need a few DQ checks in-line:
 
 ```python
 import polars as pl
@@ -42,14 +40,13 @@ result = suite.run(source)
 print(result.summary)
 ```
 
-Suites can also be defined in YAML — see `lens.config.load_suite`. The `/triage-data` Claude Code skill drives the v1 single-suite + TabPFN-TS detection + RCA workflow against a `LINEAGE.yaml` (schema in `docs/LINEAGE.md`).
+Suites can also be defined in YAML — see `lens.config.load_suite`.
 
-### 2. v2 — multi-agent surveillance pipeline
+## Surveillance pipeline
 
 The full pipeline: `lens-wiki/` → `DetectionOrchestrator` → `RCAAgent` → HTML / markdown brief.
 
 ```python
-import polars as pl
 from pathlib import Path
 from lens.orchestrator import DetectionOrchestrator
 from lens.rca.agent import RCAAgent
@@ -77,19 +74,20 @@ rcas = {f.finding_id: rca.investigate(f, wiki, sources) for f in findings
 
 # 4. Render the morning brief.
 render_brief(findings, rcas, Path("out/LENS_brief.html"),
-             dataset_label="Q2 lending", prior_findings_path=Path("out/findings.latest.json"))
+             dataset_label="Q2 lending",
+             prior_findings_path=Path("out/findings.latest.json"))
 ```
 
-#### Ad-hoc investigation
+### Ad-hoc investigation
 
-Use the `/lens-rca` Claude Code slash command to investigate a single flag or run a fresh investigation without a scheduled run:
+`/lens-rca` is a Claude Code slash command for investigating a single flag or a fresh question, off the morning cadence:
 
 ```bash
 /lens-rca --finding-id <id>
 /lens-rca --investigate-entity DEAL-42 --field balance --date 2026-05-01
 ```
 
-#### Delivery alternatives to the HTML file
+### Other delivery channels
 
 - **Slack-pasteable digest:** `python -m lens.brief.markdown out/findings.latest.json` prints a top-5 markdown summary.
 - **Feedback capture:** `python -m lens.brief.feedback <finding_id> real|false_positive|needs_more` appends to `feedback.jsonl` for future severity calibration.

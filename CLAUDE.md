@@ -17,7 +17,7 @@ python3 -m pytest tests/test_checks.py::test_null_check -v  # run single test
 ruff check src/ tests/                      # lint
 ruff format src/ tests/                     # format
 
-# v2 CLIs
+# Brief CLIs
 python -m lens.brief.markdown <findings.json>          # render Slack-pasteable digest
 python -m lens.brief.feedback <finding_id> <label>     # append {real|false_positive|needs_more} to feedback.jsonl
 ```
@@ -28,23 +28,53 @@ The `eval` pytest marker (registered in `pyproject.toml`) gates real-LLM tests; 
 
 ```
 src/lens/
-├── types.py          # Core data types: Issue, CheckResult, SuiteResult, Severity
-├── engine.py         # Suite — orchestrates running multiple checks against data
-├── config.py         # YAML config loader → Suite
-├── io/               # Data source connectors (DataSource ABC)
-│   ├── base.py       # Abstract DataSource with read/read_snapshot/read_history
-│   ├── polars_source.py   # In-memory / CSV / Parquet
+├── types.py             # Issue, Finding, RCAResult, CheckResult, SuiteResult, Severity, compute_finding_id
+├── engine.py            # Suite — runs a list of checks against one DataSource
+├── orchestrator.py      # DetectionOrchestrator — composes Suite + cross-source list, scores, dedupes, writes findings.json
+├── config.py            # YAML config loader → Suite
+├── scoring.py           # score_to_severity(raw_score, detector) → (Severity, confidence)
+├── io/                  # Data source connectors (DataSource ABC)
+│   ├── base.py          # Abstract DataSource with read/read_snapshot/read_history
+│   ├── polars_source.py # In-memory / CSV / Parquet
 │   └── snowflake_source.py # Snowflake via ConnectorX
-└── checks/           # Check framework + built-in checks
-    ├── base.py       # BaseCheck ABC — all checks implement run()
-    ├── registry.py   # Global CheckRegistry — @registry.register decorator
-    ├── temporal.py   # StaleDataCheck, MonotonicityCheck, VolatilityCheck
-    ├── crosssource.py # CrossSourceMatchCheck (uses run_cross() for two sources)
-    ├── snapshot.py   # NullCheck, RangeCheck
-    └── tabpfn_anomaly.py # TabPFNAnomalyCheck — zero-shot TS anomaly detection (optional [tabpfn] extra)
+├── checks/              # Detection framework + built-in detectors
+│   ├── base.py          # BaseCheck ABC
+│   ├── registry.py      # Global CheckRegistry — @registry.register
+│   ├── snapshot.py      # NullCheck, RangeCheck
+│   ├── temporal.py      # StaleDataCheck, MonotonicityCheck, VolatilityCheck
+│   ├── temporal_stl.py  # STLResidualCheck — classical seasonal-trend residual
+│   ├── crosssource.py   # CrossSourceMatchCheck (two-source positional)
+│   ├── crosssource_wiki.py # CrossSourceWikiCheck — reads structured rules from lens-wiki/
+│   ├── equation.py      # Structured-equation evaluator (no string-eval)
+│   └── tabpfn_anomaly.py # TabPFNAnomalyCheck — zero-shot TS (optional [tabpfn] extra)
+├── wiki/                # lens-wiki/ machinery
+│   ├── reader.py        # YAML-frontmatter parser → RulePage / DatasetPage / LineagePage
+│   ├── cache.py         # WikiCache — eager in-memory snapshot of all pages
+│   ├── ingest.py        # ClaudeCodeClient + IngestionWorker (LLM-driven)
+│   ├── prompts.py       # Ingestion prompt templates
+│   └── safety.py        # Path + content guards before sending files to the LLM
+├── rca/                 # Root-cause investigator
+│   ├── agent.py         # RCAAgent — per-finding, writes rca/<run_id>/<finding_id>.json
+│   ├── prompts.py       # RCA prompt template
+│   └── git_links.py     # GitHub/GitLab commit-URL helpers
+└── brief/               # Rendering
+    ├── html.py          # render_brief() — Jinja2 + autoescape, self-contained HTML
+    ├── markdown.py      # render_brief_summary() — Slack-pasteable top-5 digest
+    ├── feedback.py      # CLI: append a label to feedback.jsonl
+    └── templates/       # Jinja2 templates + styles.css
 ```
 
-The `/triage-data` skill (`.claude/commands/triage-data.md`) drives a two-phase workflow on top of `TabPFNAnomalyCheck`: detect anomalies, then walk lineage + git history for root-cause analysis. Project-agnostic prompt; dataset/lineage knowledge lives in `LINEAGE.yaml` (schema in `docs/LINEAGE.md`). The architectural growth path (single skill → two-agent split when LLM judgment appears upstream) is recorded in `~/.arc/state/projects/lens/decisions/2026-05-09-architecture-growth-path.md`.
+The pipeline:
+
+```
+lens-wiki/  →  DetectionOrchestrator  →  RCAAgent  →  HTML / markdown brief
+```
+
+Two entry points:
+- **Scheduled batch** — `DetectionOrchestrator.run(...)` → RCA loop → `render_brief()` → HTML on disk. Designed for cron / morning brief.
+- **Ad-hoc per-finding** — `.claude/commands/lens-rca.md` slash command. Given `--finding-id <id>`, looks it up in `findings.latest.json` and runs `RCAAgent.investigate(...)`. Given `--investigate-entity <id> --field <f> --date <d>`, synthesizes a finding-like wrapper and runs RCA directly — for investor questions or post-incident work, no orchestrator run needed.
+
+The older `/triage-data` skill (`.claude/commands/triage-data.md`) is a slimmer single-trace alternative built around `TabPFNAnomalyCheck` + a `LINEAGE.yaml` (schema in `docs/LINEAGE.md`). It coexists with the orchestrator pipeline — use it when you want one LLM trace over detection + RCA fused; use the orchestrator pipeline when you want pluggable detectors, dedup across them, severity/confidence scoring, and the HTML brief.
 
 **Key patterns:**
 - All data flows as `pl.LazyFrame` for deferred execution
@@ -55,18 +85,6 @@ The `/triage-data` skill (`.claude/commands/triage-data.md`) drives a two-phase 
 - Convention: `entity_col` and `snapshot_col` are configurable column names passed throughout
 - **Wiki is the source of truth for cross-source rules**, distilled from production code into structured frontmatter equations. Each `rules/*.md` page carries an `equation` block with `lhs`, `rhs`, and `tolerance`, where each operand specifies `op ∈ {add, sub, mul, div}` and `agg ∈ {None, sum, min, max, mean}`. NO string-eval — `CrossSourceWikiCheck` evaluates the structured spec via Polars expressions (`src/lens/checks/equation.py`).
 - **All LLM calls go via subprocess `claude` CLI**, never the Anthropic SDK directly. See the "LLM Access Pattern" section.
-
-## v2 Architecture (LENS Surveillance v2)
-
-V2 layers a multi-agent surveillance pipeline above the v1 check framework. The four-component pipeline is:
-
-```
-lens-wiki/  →  DetectionOrchestrator  →  RCAAgent  →  HTML / markdown brief
-```
-
-There are two entry points:
-- **Scheduled morning brief** — `DetectionOrchestrator.run(...)` → loop RCA over findings → `render_brief()` → HTML on disk. Designed for cron / morning batch.
-- **Ad-hoc per-finding RCA** — `.claude/commands/lens-rca.md` skill — given a `finding_id`, looks it up in `findings.latest.json` and runs `RCAAgent.investigate(...)` against the live wiki. Use for investor questions, post-incident analysis, anything off the morning cadence.
 
 ### lens-wiki/ convention
 
@@ -81,55 +99,28 @@ lens-wiki/
 └── changes/          # changelog entries describing wiki updates
 ```
 
-Schema: every page is YAML frontmatter (fenced by `---`) followed by a markdown body. Parsed by `src/lens/wiki/reader.py` into `RulePage`, `DatasetPage`, or `LineagePage` based on the parent directory. Malformed pages are logged and skipped, never raised.
+Every page is YAML frontmatter (fenced by `---`) followed by a markdown body. `src/lens/wiki/reader.py` parses pages into `RulePage`, `DatasetPage`, or `LineagePage` based on the parent directory. Malformed pages are logged and skipped, never raised.
 
 Update modes:
 - **Auto-extracted** — `src/lens/wiki/ingest.py` reads `(dataset, code_path)` and asks the LLM (via the headless-mode pattern below) to draft the page. Incremental — re-runs only touch pages whose source changed.
 - **Hand-authored** — analysts hand-write or edit pages directly. The reader treats both modes identically.
 
-### Modules
-
-```
-src/lens/
-├── orchestrator.py   # DetectionOrchestrator — central run loop, dedupe, findings.json writer
-├── scoring.py        # score_to_severity(raw_score, detector) → (Severity, confidence)
-├── wiki/             # lens-wiki/ machinery
-│   ├── reader.py     # YAML-frontmatter parser → RulePage / DatasetPage / LineagePage
-│   ├── cache.py      # WikiCache — eager in-memory snapshot of all pages
-│   ├── ingest.py     # ClaudeCodeClient + ingestion worker
-│   ├── prompts.py    # ingestion prompt templates
-│   └── safety.py     # path containment guards for wiki writes
-├── rca/              # RCA agent
-│   ├── agent.py      # RCAAgent — per-finding investigator, writes rca/<run_id>/<finding_id>.json
-│   ├── prompts.py    # RCA prompt template
-│   └── git_links.py  # commit-URL helpers for the brief
-├── brief/            # rendering
-│   ├── html.py       # render_brief() — Jinja2 + autoescape, self-contained HTML
-│   ├── markdown.py   # render_brief_summary() — Slack-pasteable top-5 digest
-│   ├── feedback.py   # CLI: append a label to feedback.jsonl
-│   └── templates/    # Jinja2 templates + styles.css
-└── checks/
-    ├── temporal_stl.py     # NEW: STLResidualCheck — classical TS baseline
-    ├── crosssource_wiki.py # NEW: CrossSourceWikiCheck — reads rules/*.md
-    └── equation.py         # structured-equation evaluator (no string-eval)
-```
-
-### Detectors (v2 additions)
-
-All detectors remain pluggable via `@registry.register`. The two new ones:
-- **`stl_residual`** — classical seasonal-trend decomposition residual; lives in `src/lens/checks/temporal_stl.py`. Runs alongside `tabpfn_anomaly`.
-- **`cross_source_wiki`** — reads every `RulePage` from `WikiCache`, evaluates the structured `equation` spec via Polars expressions, emits one Issue per per-row breach. Detector source is stamped as `cross_source_wiki:<rule_slug>` so `scoring.py` can normalize it back to the `cross_source_wiki` threshold table.
-
 ### Orchestrator
 
-`DetectionOrchestrator` composes the existing `Suite` for single-source checks and a separate list of cross-source checks. On each `.run(...)`:
+`DetectionOrchestrator` composes the `Suite` for single-source checks plus a separate list of cross-source checks. On each `.run(...)`:
 1. Materializes every input source as `pl.LazyFrame`.
 2. Builds one `WikiCache` from `wiki_root` (empty cache if `None`) and shares it across every cross-source detector — wiki I/O happens once per run.
 3. Runs single-source checks against each source, then runs cross-source checks once over the full source dict via `run_cross(sources, *, wiki, entity_col, snapshot_col)`. Per-check failures are logged and skipped; the rest of the run continues.
-4. Scores every Issue and dedupes on `(entity_id, field_name, snapshot_date)` — the dedup key is the SHA1 / uuid5 `finding_id` computed by `compute_finding_id(...)`. The representative Issue is the highest-severity / highest-confidence member of the group; `Finding.detector_sources` lists every detector that flagged the point.
+4. Scores every Issue and dedupes on `(entity_id, field_name, snapshot_date)` — the dedup key is the uuid5 `finding_id` computed by `compute_finding_id(...)`. The representative Issue is the highest-severity / highest-confidence member of the group; `Finding.detector_sources` lists every detector that flagged the point.
 5. Writes `findings.{run_id}.json` and atomically repoints `findings.latest.json` at it via `os.replace` on a temp symlink (safe under concurrent runs).
 
-Only the wiki-style cross-check signature is supported. The legacy two-frame `run_cross(source_a, source_b)` shape from `CrossSourceMatchCheck` is intentionally not wired in — cross-source matching belongs in a wiki rule.
+Only the wiki-style cross-check signature is supported by the orchestrator. The two-frame `run_cross(source_a, source_b)` shape from `CrossSourceMatchCheck` is intentionally not wired in — cross-source matching belongs in a wiki rule.
+
+### Detectors
+
+All detectors register via `@registry.register`. The cross-source / classical-TS additions:
+- **`stl_residual`** — classical seasonal-trend decomposition residual; lives in `src/lens/checks/temporal_stl.py`. Runs alongside `tabpfn_anomaly`. Guards short-history and constant-value series — both skip silently rather than crashing.
+- **`cross_source_wiki`** — reads every `RulePage` from `WikiCache`, evaluates the structured `equation` spec via Polars expressions (`src/lens/checks/equation.py`), emits one Issue per per-row breach. Detector source is stamped as `cross_source_wiki:<rule_slug>` so `scoring.py` can normalize it back to the `cross_source_wiki` threshold table.
 
 ### RCA agent
 
