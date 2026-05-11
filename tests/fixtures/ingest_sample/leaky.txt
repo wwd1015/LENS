@@ -1,0 +1,10 @@
+Test fixture: a file whose NAME looks benign but whose CONTENT matches a
+credential regex. The safety check must catch this on content scan.
+
+The "AWS key" below is a FAKE, pattern-matching string (it starts with AKIA
+and has 16 uppercase alphanumerics after — matches the regex but is not a
+real credential). Used to verify _matches_secret_content fires.
+
+aws_key_id = AKIA1234567890123456
+
+Nothing else in this file should be sensitive — it's purely a test artifact.
