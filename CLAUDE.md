@@ -43,6 +43,7 @@ src/lens/
 │   ├── snapshot.py      # NullCheck, RangeCheck
 │   ├── temporal.py      # StaleDataCheck, MonotonicityCheck, VolatilityCheck
 │   ├── temporal_stl.py  # STLResidualCheck — classical seasonal-trend residual
+│   ├── drill_down.py    # HierarchicalDrillDownCheck — top-down per-segment z-score; emits deepest-leaf paths
 │   ├── crosssource.py   # CrossSourceMatchCheck (two-source positional)
 │   ├── crosssource_wiki.py # CrossSourceWikiCheck — reads structured rules from lens-wiki/
 │   ├── equation.py      # Structured-equation evaluator (no string-eval)
@@ -118,9 +119,10 @@ Only the wiki-style cross-check signature is supported by the orchestrator. The 
 
 ### Detectors
 
-All detectors register via `@registry.register`. The cross-source / classical-TS additions:
+All detectors register via `@registry.register`. The cross-source / classical-TS / drill-down additions:
 - **`stl_residual`** — classical seasonal-trend decomposition residual; lives in `src/lens/checks/temporal_stl.py`. Runs alongside `tabpfn_anomaly`. Guards short-history and constant-value series — both skip silently rather than crashing.
 - **`cross_source_wiki`** — reads every `RulePage` from `WikiCache`, evaluates the structured `equation` spec via Polars expressions (`src/lens/checks/equation.py`), emits one Issue per per-row breach. Detector source is stamped as `cross_source_wiki:<rule_slug>` so `scoring.py` can normalize it back to the `cross_source_wiki` threshold table.
+- **`hierarchical_drill_down`** — aggregates a numeric `field` over every prefix of an ordered `segments=[...]` list (depth 0 = portfolio, depth N = all segments). At each depth, every segment-combination's aggregate time series is z-scored against its own history; anomalies are computed INDEPENDENTLY at every level. The detector then emits only the deepest still-anomalous path for each (snapshot, root chain) — ancestor anomalies whose descendants are also anomalous on the same date are suppressed. `details["segment_path"]` carries the structured path. Guards `min_history`, `min_segment_size`, constant series. Lives in `src/lens/checks/drill_down.py`.
 
 ### RCA agent
 

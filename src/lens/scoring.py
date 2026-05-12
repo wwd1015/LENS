@@ -32,6 +32,11 @@ DEFAULT_THRESHOLDS: dict[str, list[tuple[float, Severity]]] = {
         (4.0, Severity.ERROR),
         (5.0, Severity.CRITICAL),
     ],
+    "hierarchical_drill_down": [
+        (3.0, Severity.WARNING),
+        (4.0, Severity.ERROR),
+        (5.0, Severity.CRITICAL),
+    ],
     "cross_source_wiki": [
         (0.01, Severity.WARNING),
         (0.05, Severity.ERROR),

@@ -49,6 +49,7 @@ import polars as pl
 from lens.checks import (  # noqa: F401  (import-for-side-effects)
     crosssource,
     crosssource_wiki,
+    drill_down,
     snapshot,
     temporal,
 )

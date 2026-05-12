@@ -1,0 +1,67 @@
+# Example LENS Suite configuration.
+#
+# Load in Python with:
+#     from lens.config import load_suite
+#     suite = load_suite("examples/suite.yaml")
+#     result = suite.run(my_data_source)
+#
+# Every entry under `checks:` calls into a check registered via
+# @registry.register; valid names today are:
+#   - null_check
+#   - range_check
+#   - stale_data
+#   - monotonicity
+#   - volatility
+#   - stl_residual
+#   - tabpfn_anomaly       (requires the [tabpfn] extra)
+#   - cross_source_match   (requires run_cross — not loadable via Suite alone)
+#   - cross_source_wiki    (driven by lens-wiki/, not by this YAML)
+#
+# `severity` is optional — defaults to each check's `default_severity`.
+
+entity_col: loan_id
+snapshot_col: as_of_date
+
+checks:
+  - name: null_check
+    params:
+      fields: [balance, status]
+
+  - name: range_check
+    severity: error
+    params:
+      field: balance
+      min_value: 0
+      max_value: 100_000_000
+
+  - name: stale_data
+    severity: warning
+    params:
+      field: balance
+      max_unchanged: 30
+
+  - name: monotonicity
+    severity: error
+    params:
+      field: cumulative_payments
+      direction: increasing
+
+  - name: volatility
+    params:
+      field: balance
+      max_pct_change: 0.5
+
+  - name: stl_residual
+    params:
+      field: balance
+      period: 30
+      z_threshold: 3.0
+
+  - name: hierarchical_drill_down
+    params:
+      field: balance
+      segments: [asset_class, vintage]
+      agg: sum
+      z_threshold: 3.0
+      min_segment_size: 10
+      min_history: 14
