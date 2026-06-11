@@ -9,3 +9,6 @@ build/
 dist/
 .venv/
 .env
+
+# Demo / batch run outputs
+examples/lending_demo/out/

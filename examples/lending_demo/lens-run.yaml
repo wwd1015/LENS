@@ -1,0 +1,36 @@
+# Demo run config — `lens run examples/lending_demo/lens-run.yaml` from the
+# repo root (paths resolve relative to this file).
+entity_col: deal_id
+snapshot_col: snapshot_date
+
+sources:
+  loan_pool: data/loan_pool.csv
+  senior_debt: data/senior_debt.csv
+  deal_terms: data/deal_terms.csv
+
+wiki_root: wiki
+output_dir: out
+
+checks:
+  - name: null_check
+    sources: [loan_pool] # only loan_pool has a status column
+    params: { fields: [status] }
+  - name: stl_residual
+    sources: [senior_debt, loan_pool]
+    params: { field: balance, period: 4 }
+
+cross_checks:
+  - cross_source_wiki
+
+rca:
+  enabled: true
+  severity_floor: error
+  repo_root: ../.. # the LENS repo itself — lineage paths are repo-relative
+
+feedback:
+  path: out/feedback.jsonl
+  expiry_days: 90
+
+brief:
+  dataset_label: "Lending demo portfolio"
+  top_n: 5

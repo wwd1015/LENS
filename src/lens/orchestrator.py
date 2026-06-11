@@ -56,9 +56,16 @@ from lens.checks import (  # noqa: F401  (import-for-side-effects)
 from lens.checks.base import BaseCheck
 from lens.checks.registry import registry
 from lens.engine import Suite
+from lens.feedback_loop import apply_feedback
 from lens.io.base import DataSource
-from lens.scoring import score_to_severity
-from lens.types import Finding, Issue, Severity, compute_finding_id
+from lens.scoring import has_thresholds, score_to_severity
+from lens.types import (
+    SEVERITY_ORDER,
+    Finding,
+    Issue,
+    compute_finding_id,
+    detector_family,
+)
 from lens.wiki.cache import WikiCache
 
 # Optional check modules — only import if their deps are installed. Wrapped in
@@ -76,12 +83,12 @@ except Exception:  # noqa: BLE001
 logger = logging.getLogger(__name__)
 
 
-_SEVERITY_ORDER: dict[Severity, int] = {
-    Severity.INFO: 0,
-    Severity.WARNING: 1,
-    Severity.ERROR: 2,
-    Severity.CRITICAL: 3,
-}
+_SEVERITY_ORDER = SEVERITY_ORDER
+
+# Agreement boost (deterministic ensemble): when ≥2 distinct detector
+# families flag the same point, confidence moves halfway toward 1.0.
+# Independent methods agreeing halves the remaining doubt — no LLM involved.
+_AGREEMENT_BOOST_FACTOR = 0.5
 
 
 def _empty_wiki_cache() -> WikiCache:
@@ -134,10 +141,19 @@ def _detector_key(issue: Issue) -> str:
 
 
 def _rescore_issue(issue: Issue) -> Issue:
-    """Return a copy of ``issue`` with severity/confidence/finding_id populated."""
-    raw = _raw_score(issue)
+    """Return a copy of ``issue`` with severity/confidence/finding_id populated.
+
+    Detectors with a threshold row get their raw score mapped through
+    :func:`score_to_severity`. Self-scoring detectors (no threshold row —
+    ``null_check``, ``range_check``, the temporal assertions) keep the
+    severity/confidence they assigned themselves; mapping them would silently
+    downgrade every assertion to ``(INFO, 0.0)``.
+    """
     detector = _detector_key(issue)
-    severity, confidence = score_to_severity(raw, detector)
+    if has_thresholds(detector):
+        severity, confidence = score_to_severity(_raw_score(issue), detector)
+    else:
+        severity, confidence = issue.severity, issue.confidence
     finding_id = compute_finding_id(issue.entity_id, issue.field_name, issue.snapshot_date)
     return dataclasses.replace(
         issue,
@@ -173,6 +189,27 @@ def _stable_dedupe(items: list[str]) -> list[str]:
             seen.add(item)
             out.append(item)
     return out
+
+
+def _apply_agreement_boost(rep: Issue, detector_sources: list[str]) -> Issue:
+    """Boost confidence when ≥2 distinct detector families agree on a point.
+
+    Confidence moves halfway toward 1.0 (``conf + (1 - conf) * 0.5``);
+    severity is untouched. The pre-boost value and the agreeing families are
+    recorded in ``details["agreement_boost"]`` so the brief / RCA can explain
+    why the number moved.
+    """
+    families = _stable_dedupe([detector_family(s) for s in detector_sources])
+    if len(families) < 2:
+        return rep
+    before = float(rep.confidence or 0.0)
+    boosted = min(1.0, before + (1.0 - before) * _AGREEMENT_BOOST_FACTOR)
+    new_details = dict(rep.details or {})
+    new_details["agreement_boost"] = {
+        "families": families,
+        "confidence_before": round(before, 6),
+    }
+    return dataclasses.replace(rep, confidence=boosted, details=new_details)
 
 
 def _atomic_symlink(target_name: str, link_path: Path) -> None:
@@ -222,15 +259,32 @@ class DetectionOrchestrator:
         self.entity_col = entity_col
         self.snapshot_col = snapshot_col
         self._suite = Suite(entity_col=entity_col, snapshot_col=snapshot_col)
+        # Parallel to _suite._checks: per-check source scope (None = all).
+        self._single_scopes: list[set[str] | None] = []
         self._cross_checks: list[BaseCheck] = []
 
     # ------------------------------------------------------------------
     # Builder API
     # ------------------------------------------------------------------
 
-    def add_single(self, check: str | BaseCheck, **kwargs: Any) -> DetectionOrchestrator:
-        """Add a single-source check (delegates to the internal ``Suite``)."""
+    def add_single(
+        self,
+        check: str | BaseCheck,
+        *,
+        sources: list[str] | None = None,
+        **kwargs: Any,
+    ) -> DetectionOrchestrator:
+        """Add a single-source check (delegates to the internal ``Suite``).
+
+        Args:
+            check: Registered check name or instance; kwargs go to the
+                constructor when a name is given.
+            sources: Optional source names this check runs against. ``None``
+                (default) runs it on every source — fine when sources share a
+                schema, noisy when a check's columns exist in only one.
+        """
         self._suite.add(check, **kwargs)
+        self._single_scopes.append(set(sources) if sources is not None else None)
         return self
 
     def add_cross(self, check: str | BaseCheck, **kwargs: Any) -> DetectionOrchestrator:
@@ -258,6 +312,8 @@ class DetectionOrchestrator:
         wiki_root: Path | str | None = None,
         output_dir: Path | str | None = None,
         run_id: str | None = None,
+        feedback_path: Path | str | None = None,
+        feedback_expiry_days: int = 90,
     ) -> list[Finding]:
         """Execute every configured detector and persist a normalized findings file.
 
@@ -269,6 +325,11 @@ class DetectionOrchestrator:
                 ``findings.latest.json`` into. Created if it doesn't exist.
             run_id: Optional explicit run id. If ``None``, a unique id is
                 generated as ``YYYYMMDDTHHMMSS-<8 hex chars>``.
+            feedback_path: Optional ``feedback.jsonl`` of analyst verdicts.
+                Unexpired false-positive verdicts downgrade matching findings
+                to INFO before the findings file is written (ADR 0001 —
+                downgrade, never drop), so findings.json reflects suppression.
+            feedback_expiry_days: Verdicts older than this stop suppressing.
 
         Returns:
             The deduplicated ``list[Finding]`` (also written to disk).
@@ -305,8 +366,12 @@ class DetectionOrchestrator:
         # iterate per-check rather than calling Suite.run once-per-source
         # because we need fine-grained failure isolation: a single bad check
         # must not knock out the rest of the run.
-        for check in self._suite._checks:  # noqa: SLF001 - intentional composition
+        for check, scope in zip(  # noqa: SLF001 - intentional composition
+            self._suite._checks, self._single_scopes
+        ):
             for source_name, lf in lazy_sources.items():
+                if scope is not None and source_name not in scope:
+                    continue
                 try:
                     result = check.run(
                         lf,
@@ -398,6 +463,7 @@ class DetectionOrchestrator:
             detector_sources = _stable_dedupe(
                 [i.detector_source or i.check_name for i in group]
             )
+            rep = _apply_agreement_boost(rep, detector_sources)
             findings.append(
                 Finding(
                     issue=rep,
@@ -410,6 +476,24 @@ class DetectionOrchestrator:
         # Stable output order: by finding_id (deterministic, doesn't leak
         # iteration order from the dict).
         findings.sort(key=lambda f: f.finding_id)
+
+        # --- feedback suppression (ADR 0001) -----------------------------
+        # Applied BEFORE the write so findings.json carries the downgraded
+        # severities. Failures degrade to no-suppression, never a dead run.
+        if feedback_path is not None:
+            try:
+                findings = apply_feedback(
+                    findings,
+                    feedback_path=Path(feedback_path),
+                    output_dir=output_dir,
+                    expiry_days=feedback_expiry_days,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "orchestrator: feedback application failed; "
+                    "continuing without suppression: %s",
+                    exc,
+                )
 
         # --- write findings file + atomic symlink ----------------------
         run_file = output_dir / f"findings.{run_id}.json"

@@ -244,3 +244,60 @@ h1 {
 .hide-warning .severity-warning { display: none; }
 .hide-error .severity-error     { display: none; }
 .hide-critical .severity-critical { display: none; }
+
+/* Feedback buttons — POST to /feedback under `lens serve`; static-file
+ * opens degrade to showing the CLI command in .feedback-status. */
+.feedback-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: 0.6rem;
+}
+
+.feedback-bar button {
+    border: 1px solid #ccc;
+    background: #fff;
+    border-radius: 3px;
+    padding: 0.15rem 0.6rem;
+    font-size: 0.78rem;
+    cursor: pointer;
+    color: var(--fg-muted);
+}
+
+.feedback-bar button:hover {
+    border-color: #888;
+    color: #222;
+}
+
+.feedback-bar button.chosen {
+    border-color: var(--sev-info);
+    color: var(--sev-info);
+    font-weight: 600;
+}
+
+.feedback-status {
+    font-size: 0.75rem;
+    color: var(--fg-muted);
+    font-family: ui-monospace, monospace;
+}
+
+/* Feedback-suppressed findings (ADR 0001: downgraded to INFO, never dropped). */
+.badge-suppressed {
+    background: #8a6d3b;
+}
+
+.badge-prior-feedback {
+    background: #6c757d;
+}
+
+.suppressed-section {
+    margin-top: 2rem;
+    opacity: 0.85;
+}
+
+.suppressed-section > summary {
+    cursor: pointer;
+    color: var(--fg-muted);
+    font-size: 0.9rem;
+    padding: 0.4rem 0;
+}

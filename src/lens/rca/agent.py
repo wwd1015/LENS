@@ -73,6 +73,56 @@ def _summarize_finding(finding: Finding) -> str:
     return "\n".join(lines)
 
 
+def _summarize_group(group: list[Finding], rep: Finding) -> str:
+    """Describe the Finding Group the representative belongs to (ADR 0003).
+
+    Batch RCA runs once per group, so the prompt must convey the blast
+    radius: how many findings share this (detector family, field), which
+    entities, and the severity mix. Capped entity list keeps the prompt
+    bounded on fan-out incidents.
+    """
+    others = [f for f in group if f.finding_id != rep.finding_id]
+    if not others and len(group) <= 1:
+        return ""
+    sev_counts: dict[str, int] = {}
+    for f in group:
+        sev_counts[f.issue.severity.value] = sev_counts.get(f.issue.severity.value, 0) + 1
+    entities = []
+    for f in group:
+        eid = f.issue.entity_id
+        if eid and eid not in entities:
+            entities.append(eid)
+    shown = entities[:20]
+    more = len(entities) - len(shown)
+    lines = [
+        "",
+        "group_context: this finding is the representative of a Finding Group "
+        "investigated as ONE incident.",
+        f"group_size: {len(group)} findings",
+        f"group_severities: {json.dumps(sev_counts, sort_keys=True)}",
+        f"group_entities: {', '.join(str(e) for e in shown)}"
+        + (f" (+{more} more)" if more > 0 else ""),
+    ]
+    dates = sorted(
+        {
+            str(
+                f.issue.snapshot_date.date()
+                if hasattr(f.issue.snapshot_date, "date")
+                else f.issue.snapshot_date
+            )
+            for f in group
+            if f.issue.snapshot_date is not None
+        }
+    )
+    if dates:
+        lines.append(f"group_snapshot_dates: {dates[0]} .. {dates[-1]} ({len(dates)} distinct)")
+    lines.append(
+        "Prefer hypotheses that explain the WHOLE group (one upstream cause) "
+        "over per-entity explanations."
+    )
+    return "\n".join(lines)
+
+
 def _format_rows(rows: list[dict[str, Any]], header: str) -> str:
     """Format a list of polars rows as a plain-text block."""
     if not rows:
@@ -461,11 +511,20 @@ class RCAAgent:
         *,
         snapshot_col: str = "snapshot_date",
         entity_col: str = "entity_id",
+        group: list[Finding] | None = None,
     ) -> RCAResult:
-        """Synthesize an :class:`RCAResult` for one :class:`Finding`."""
+        """Synthesize an :class:`RCAResult` for one :class:`Finding`.
+
+        When ``group`` is supplied (batch mode, ADR 0003), ``finding`` is the
+        group's representative and the prompt carries the full group context —
+        member count, entities, severity mix — so the hypothesis explains the
+        incident, not just one entity.
+        """
         issue = finding.issue
 
         finding_summary = _summarize_finding(finding)
+        if group:
+            finding_summary += "\n" + _summarize_group(group, finding)
 
         lf = _pick_source_lf(sources, issue)
         if lf is not None:

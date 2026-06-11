@@ -45,6 +45,22 @@ DEFAULT_THRESHOLDS: dict[str, list[tuple[float, Severity]]] = {
 }
 
 
+def has_thresholds(
+    detector: str,
+    *,
+    overrides: dict[str, list[tuple[float, Severity]]] | None = None,
+) -> bool:
+    """True when ``detector`` has a threshold row (after slug normalization).
+
+    Detectors without thresholds are self-scoring — they assign their own
+    severity (e.g. ``null_check`` emits ERROR directly) and the orchestrator
+    must preserve it rather than calling :func:`score_to_severity`, which
+    would downgrade them to ``(INFO, 0.0)``.
+    """
+    table = overrides if overrides is not None else DEFAULT_THRESHOLDS
+    return _normalize_detector(detector) in table
+
+
 def _normalize_detector(detector: str) -> str:
     """Strip rule-slug suffix for keying: 'cross_source_wiki:rule_xyz' → 'cross_source_wiki'."""
     if ":" in detector:

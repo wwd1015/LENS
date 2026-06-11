@@ -18,6 +18,24 @@ pip install -e ".[snowflake]"    # with Snowflake DataSource
 pip install -e ".[tabpfn]"       # with TabPFN-TS zero-shot anomaly detection
 ```
 
+Installing registers the `lens` CLI: `lens run` (scheduled batch), `lens serve`
+(brief + feedback capture), `lens feedback`, `lens brief`.
+
+## Quick start — one batch run
+
+A fully-worked demo (synthetic lending data + hand-authored wiki + planted
+anomalies) ships in [`examples/lending_demo/`](examples/lending_demo/):
+
+```bash
+lens run examples/lending_demo/lens-run.yaml   # detect → group RCA → brief
+lens serve --output-dir examples/lending_demo/out   # view brief, click feedback
+```
+
+The run config is one YAML file declaring sources, the detector suite, the RCA
+policy, and the feedback policy — see
+[`examples/lending_demo/lens-run.yaml`](examples/lending_demo/lens-run.yaml).
+Pointing your crontab at `lens run <config>` is the entire deployment story.
+
 ## Quick start — inline rule-based suite
 
 For pipelines that just need a few DQ checks in-line:
@@ -62,7 +80,7 @@ If you want a brand-new kind of rule that doesn't fit any of these — say, "bal
 
 ## Surveillance pipeline
 
-The full pipeline: `lens-wiki/` → `DetectionOrchestrator` → `RCAAgent` → HTML / markdown brief.
+The full pipeline: `lens-wiki/` → `DetectionOrchestrator` → `RCAAgent` → HTML / markdown brief. `lens run <config.yaml>` executes it end-to-end (`lens.batch.run_batch`); the Python API below is the library form for embedding:
 
 ```python
 from pathlib import Path
@@ -85,7 +103,9 @@ findings = orch.run(
     output_dir=Path("out"),
 )
 
-# 3. RCA each finding above a severity gate.
+# 3. RCA per Finding Group above a severity floor. (`lens run` does this
+#    grouping automatically — one investigation per (detector family, field)
+#    group, so a fan-out incident costs one LLM call, not hundreds.)
 rca = RCAAgent(repo_root=Path("."))
 rcas = {f.finding_id: rca.investigate(f, wiki, sources) for f in findings
         if f.issue.severity.value in {"error", "critical"}}
@@ -107,8 +127,19 @@ render_brief(findings, rcas, Path("out/LENS_brief.html"),
 
 ### Other delivery channels
 
-- **Slack-pasteable digest:** `python -m lens.brief.markdown out/findings.latest.json` prints a top-5 markdown summary.
-- **Feedback capture:** `python -m lens.brief.feedback <finding_id> real|false_positive|needs_more` appends to `feedback.jsonl` for future severity calibration.
+- **Slack-pasteable digest:** `lens brief out/findings.latest.json` prints a top-5 markdown summary (also printed by every `lens run`).
+- **Feedback capture:** the brief's one-click `[real] / [false positive] / [needs more]` buttons POST to `lens serve`, which appends to `feedback.jsonl`; `lens feedback <finding_id> <label>` is the CLI equivalent.
+
+### The feedback loop
+
+`feedback.jsonl` is consumed on every batch run (`lens.feedback_loop`). An
+unexpired **false positive** verdict downgrades future findings on the same
+(entity, field) to INFO — shown in a collapsed "suppressed" brief section,
+**never dropped** — and only when every detector family flagging the new
+finding was already judged FP; a new independent family always breaks through.
+Verdicts expire after `feedback.expiry_days` (default 90), so a muted series
+that breaks for real later resurfaces on its own. A later `real` verdict
+clears the suppression. See `docs/adr/0001`.
 
 ## The `lens-wiki/` convention
 
@@ -170,14 +201,27 @@ suite.add(
 
 The detector computes the aggregate at every depth (portfolio → asset_class → asset_class+vintage), z-scores each (segment, snapshot) against the slice's own history, and emits one Issue per "leaf" — the deepest still-anomalous path. A spike that's only visible at `commercial > 2024Q3` produces one Issue at depth 2 (suppressing the portfolio and asset_class-level findings as ancestors). A spike at the `commercial` level with no anomalous descendant produces a depth-1 Issue. The `details["segment_path"]` field carries the structured path for the brief to render.
 
-## Known gaps from the original design
+## Deliberately deferred (eval-gated)
 
-These were named in the original surveillance vision and did not land in the initial build.
+Two LLM-heavy capabilities exist as eval-gated experiments, deliberately not
+promoted to the runtime:
 
-- **Severity calibration loop.** `feedback.jsonl` records analyst `[real | false_positive | needs_more]` labels, but no job reads it back into `scoring.py` thresholds today. The capture path is shipped; the consumer is the work.
-- **LLM-judged ensemble for the TS detector pool.** The orchestrator runs detectors independently and dedupes overlaps; it does not score-combine TS detectors. `tests/eval/test_ts_ensemble.py` validates a vote-based ensemble outside the runtime; promoting it to the orchestrator is the work.
-- **Auto-extraction of rule pages, validated.** `IngestionWorker` exists and the rule-extraction spike script is in place, but until `LENS_RUN_EVAL=1 python3 tests/eval/spike_extract_rule.py` is run against real production code and passes, `lens-wiki/rules/*.md` should be treated as hand-authored.
+- **Statistical threshold calibration.** The shipped feedback consumer is
+  deterministic (suppress-by-downgrade with expiry — see "The feedback loop").
+  Recomputing `scoring.py` thresholds from accumulated verdict rates is
+  deferred until feedback volume makes it more than noise-fitting.
+- **LLM-judged ensemble for the TS detector pool.** The runtime uses a
+  deterministic agreement boost instead: when ≥2 independent detector families
+  flag the same point, the deduped finding's confidence moves halfway toward
+  1.0 (`details["agreement_boost"]`). The LLM-judged vote ensemble lives in
+  `tests/eval/test_ts_ensemble.py`; promoting it requires the eval to prove it
+  beats the deterministic boost.
+- **Auto-extraction of rule pages, validated.** `IngestionWorker` exists and
+  the rule-extraction spike script is in place, but until
+  `LENS_RUN_EVAL=1 python3 tests/eval/spike_extract_rule.py` is run against
+  real production code and passes, `lens-wiki/rules/*.md` should be treated as
+  hand-authored.
 
 ## Architecture
 
-See `CLAUDE.md` for the full architecture, module layout, key patterns, and conventions for adding new detectors.
+See `CLAUDE.md` for the full architecture, module layout, key patterns, and conventions for adding new detectors. Domain vocabulary lives in `CONTEXT.md`; load-bearing design decisions are recorded in `docs/adr/`.

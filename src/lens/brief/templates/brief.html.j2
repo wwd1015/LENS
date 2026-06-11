@@ -7,12 +7,87 @@
   `styles_inline` is intentional — that string comes from a
   developer-controlled file (styles.css), never from user/LLM input.
 -#}
+{%- macro finding_card(f) -%}
+            <article class="card severity-{{ f.severity }}" data-severity="{{ f.severity }}">
+              <div class="card-head">
+                <span class="badge badge-{{ f.severity }}">{{ f.severity_upper }}</span>
+                {% if f.suppression %}
+                  <span class="badge badge-suppressed" title="downgraded by analyst feedback{% if f.suppression.expires %} — expires {{ f.suppression.expires }}{% endif %}">
+                    suppressed (was {{ f.suppression.original_severity | upper }})
+                  </span>
+                {% endif %}
+                {% if f.prior_feedback and not f.suppression %}
+                  <span class="badge badge-prior-feedback" title="{{ f.prior_feedback.ts }}">
+                    prior verdict: {{ f.prior_feedback.label }}
+                  </span>
+                {% endif %}
+                <div class="confidence" title="confidence {{ (f.confidence * 100) | round(1) }}%">
+                  <div class="bar" style="width: {{ (f.confidence * 100) | round(1) }}%"></div>
+                </div>
+                {% if f.detector_sources %}
+                  <span class="mono" style="color: var(--fg-muted); font-size: 0.8rem;">
+                    {{ f.detector_sources | join(", ") }}
+                  </span>
+                {% endif %}
+              </div>
+
+              <div class="card-summary">
+                {% if f.entity_id %}<span class="entity">{{ f.entity_id }}</span>{% endif %}
+                {% if f.field_name %} &middot; <span class="field">{{ f.field_name }}</span>{% endif %}
+                {% if f.snapshot_date %} &middot; <span class="snapshot">{{ f.snapshot_date }}</span>{% endif %}
+              </div>
+
+              {% if f.description %}
+                <div class="card-description">{{ f.description }}</div>
+              {% endif %}
+
+              {% if f.rca %}
+                <details>
+                  <summary>RCA hypothesis (confidence {{ (f.rca.confidence * 100) | round(1) }}%)</summary>
+                  <div class="rca-block">
+                    <p class="rca-hypothesis">{{ f.rca.hypothesis }}</p>
+                    {% if f.rca.evidence %}
+                      <strong>Evidence:</strong>
+                      <ul class="rca-evidence">
+                        {% for e in f.rca.evidence %}<li>{{ e }}</li>{% endfor %}
+                      </ul>
+                    {% endif %}
+                    {% if f.rca.references %}
+                      <strong>References:</strong>
+                      <ul class="rca-references">
+                        {% for r in f.rca.references %}
+                          <li>
+                            {% if r.startswith("http://") or r.startswith("https://") %}
+                              <a href="{{ r }}" target="_blank" rel="noopener noreferrer">{{ r }}</a>
+                            {% else %}
+                              <span class="mono">{{ r }}</span>
+                            {% endif %}
+                          </li>
+                        {% endfor %}
+                      </ul>
+                    {% endif %}
+                  </div>
+                </details>
+              {% endif %}
+
+              <div class="feedback-bar"
+                   data-finding-id="{{ f.finding_id }}"
+                   data-entity-id="{{ f.entity_id }}"
+                   data-field-name="{{ f.field_name }}"
+                   data-detectors="{{ f.detector_sources | join(',') }}">
+                <button type="button" data-label="real">real</button>
+                <button type="button" data-label="false_positive">false positive</button>
+                <button type="button" data-label="needs_more">needs more</button>
+                <span class="feedback-status" aria-live="polite"></span>
+              </div>
+            </article>
+{%- endmacro -%}
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <title>LENS Brief — {{ date_iso }}</title>
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'">
   <style>{{ styles_inline | safe }}</style>
 </head>
 <body>
@@ -21,6 +96,7 @@
     <div class="subtitle">
       {% if dataset_label %}<span class="mono">{{ dataset_label }}</span> &middot; {% endif -%}
       {{ date_iso }} &middot; {{ total_findings }} finding{% if total_findings != 1 %}s{% endif %}
+      {%- if suppressed %} &middot; {{ suppressed | length }} suppressed by feedback{% endif %}
     </div>
 
     <div class="summary-row">
@@ -76,61 +152,22 @@
           </div>
 
           {% for f in group.findings_in_group %}
-            <article class="card severity-{{ f.severity }}" data-severity="{{ f.severity }}">
-              <div class="card-head">
-                <span class="badge badge-{{ f.severity }}">{{ f.severity_upper }}</span>
-                <div class="confidence" title="confidence {{ (f.confidence * 100) | round(1) }}%">
-                  <div class="bar" style="width: {{ (f.confidence * 100) | round(1) }}%"></div>
-                </div>
-                {% if f.detector_sources %}
-                  <span class="mono" style="color: var(--fg-muted); font-size: 0.8rem;">
-                    {{ f.detector_sources | join(", ") }}
-                  </span>
-                {% endif %}
-              </div>
-
-              <div class="card-summary">
-                {% if f.entity_id %}<span class="entity">{{ f.entity_id }}</span>{% endif %}
-                {% if f.field_name %} &middot; <span class="field">{{ f.field_name }}</span>{% endif %}
-                {% if f.snapshot_date %} &middot; <span class="snapshot">{{ f.snapshot_date }}</span>{% endif %}
-              </div>
-
-              {% if f.description %}
-                <div class="card-description">{{ f.description }}</div>
-              {% endif %}
-
-              {% if f.rca %}
-                <details>
-                  <summary>RCA hypothesis (confidence {{ (f.rca.confidence * 100) | round(1) }}%)</summary>
-                  <div class="rca-block">
-                    <p class="rca-hypothesis">{{ f.rca.hypothesis }}</p>
-                    {% if f.rca.evidence %}
-                      <strong>Evidence:</strong>
-                      <ul class="rca-evidence">
-                        {% for e in f.rca.evidence %}<li>{{ e }}</li>{% endfor %}
-                      </ul>
-                    {% endif %}
-                    {% if f.rca.references %}
-                      <strong>References:</strong>
-                      <ul class="rca-references">
-                        {% for r in f.rca.references %}
-                          <li>
-                            {% if r.startswith("http://") or r.startswith("https://") %}
-                              <a href="{{ r }}" target="_blank" rel="noopener noreferrer">{{ r }}</a>
-                            {% else %}
-                              <span class="mono">{{ r }}</span>
-                            {% endif %}
-                          </li>
-                        {% endfor %}
-                      </ul>
-                    {% endif %}
-                  </div>
-                </details>
-              {% endif %}
-            </article>
+            {{ finding_card(f) }}
           {% endfor %}
         </section>
       {% endfor %}
+    {% endif %}
+
+    {% if suppressed %}
+      <details class="suppressed-section">
+        <summary>
+          {{ suppressed | length }} finding{% if suppressed | length != 1 %}s{% endif %}
+          suppressed by analyst feedback (downgraded to INFO, never dropped)
+        </summary>
+        {% for f in suppressed %}
+          {{ finding_card(f) }}
+        {% endfor %}
+      </details>
     {% endif %}
   </main>
 
@@ -156,6 +193,41 @@
       bar.addEventListener("click", function (e) {
         var t = e.target;
         if (t && t.tagName === "BUTTON") applyFilter(t.getAttribute("data-filter"));
+      });
+    })();
+
+    // One-click feedback. POSTs to /feedback when the brief is opened via
+    // `lens serve`; opened as a static file the fetch fails and we fall back
+    // to showing the equivalent CLI command.
+    (function () {
+      document.addEventListener("click", function (e) {
+        var btn = e.target;
+        if (!btn || btn.tagName !== "BUTTON" || !btn.hasAttribute("data-label")) return;
+        var bar = btn.closest(".feedback-bar");
+        if (!bar) return;
+        var status = bar.querySelector(".feedback-status");
+        var payload = {
+          finding_id: bar.getAttribute("data-finding-id"),
+          label: btn.getAttribute("data-label"),
+          entity_id: bar.getAttribute("data-entity-id") || null,
+          field_name: bar.getAttribute("data-field-name") || null,
+          detector_sources: bar.getAttribute("data-detectors") || null
+        };
+        status.textContent = "…";
+        fetch("/feedback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        }).then(function (resp) {
+          if (!resp.ok) throw new Error("HTTP " + resp.status);
+          status.textContent = "recorded: " + payload.label;
+          Array.prototype.forEach.call(bar.querySelectorAll("button"), function (b) {
+            b.classList.toggle("chosen", b === btn);
+          });
+        }).catch(function () {
+          status.textContent =
+            "no server — run: lens feedback " + payload.finding_id + " " + payload.label;
+        });
       });
     })();
   </script>

@@ -20,7 +20,7 @@ from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from lens.types import Finding, RCAResult, Severity
+from lens.types import Finding, RCAResult, Severity, finding_group_key
 
 _TEMPLATES_DIR: Path = Path(__file__).parent / "templates"
 _STYLES_PATH: Path = _TEMPLATES_DIR / "styles.css"
@@ -44,17 +44,8 @@ class _GroupView:
 
 
 def _detector_prefix(finding: Finding) -> str:
-    """Pull the ``foo`` out of a ``foo:rule_slug`` detector_source identifier.
-
-    Falls back to the first entry of ``detector_sources`` or the check_name.
-    """
-    if finding.detector_sources:
-        src = finding.detector_sources[0]
-    elif finding.issue.detector_source:
-        src = finding.issue.detector_source
-    else:
-        src = finding.issue.check_name or "unknown"
-    return src.split(":", 1)[0] if src else "unknown"
+    """First detector family for the finding — see :func:`finding_group_key`."""
+    return finding_group_key(finding)[0]
 
 
 def _sort_key(finding: Finding) -> tuple[int, float]:
@@ -128,8 +119,9 @@ def _group_findings(findings: list[Finding]) -> list[_GroupView]:
     """
     buckets: dict[tuple[str, str], list[Finding]] = defaultdict(list)
     for f in findings:
-        key = (_detector_prefix(f), f.issue.field_name or "")
-        buckets[key].append(f)
+        # Same key as batch RCA (ADR 0003) — one brief section per Finding
+        # Group, one RCA per Finding Group.
+        buckets[finding_group_key(f)].append(f)
 
     groups: list[_GroupView] = []
     for (prefix, field), members in buckets.items():
@@ -186,8 +178,13 @@ def _finding_view(f: Finding, rcas: dict[str, RCAResult]) -> dict[str, Any]:
     """
     issue = f.issue
     rca = rcas.get(f.finding_id)
+    details = issue.details or {}
+    suppression = details.get("suppressed_by_feedback")
+    prior_feedback = details.get("prior_feedback")
     return {
         "finding_id": f.finding_id,
+        "suppression": dict(suppression) if isinstance(suppression, dict) else None,
+        "prior_feedback": dict(prior_feedback) if isinstance(prior_feedback, dict) else None,
         "severity": issue.severity.value,
         "severity_upper": issue.severity.value.upper(),
         "confidence": float(issue.confidence or 0.0),
@@ -243,9 +240,18 @@ def render_brief(
     """
     output_path = Path(output_path)
 
+    # Feedback-suppressed findings (ADR 0001: downgraded, never dropped)
+    # render in their own collapsed section instead of the main groups.
+    suppressed_findings = [
+        f for f in findings if (f.issue.details or {}).get("suppressed_by_feedback")
+    ]
+    active_findings = [
+        f for f in findings if not (f.issue.details or {}).get("suppressed_by_feedback")
+    ]
+
     # Sort + cap. The cap is rendered with a warning so the analyst knows
     # they're seeing the top-N rather than the full set.
-    sorted_findings = sorted(findings, key=_sort_key)
+    sorted_findings = sorted(active_findings, key=_sort_key)
     total_findings = len(sorted_findings)
     cap_applied = total_findings > max_findings
     visible_findings = sorted_findings[:max_findings] if cap_applied else sorted_findings
@@ -263,6 +269,10 @@ def render_brief(
             "findings_in_group": [_finding_view(f, rcas) for f in g.findings_in_group],
         }
         for g in groups
+    ]
+
+    suppressed_views = [
+        _finding_view(f, rcas) for f in sorted(suppressed_findings, key=_sort_key)
     ]
 
     # Delta vs. prior — None when no prior path was given.
@@ -291,6 +301,7 @@ def render_brief(
         summary_counts=summary_counts,
         delta_counts=delta_counts,
         groups=group_views,
+        suppressed=suppressed_views,
         total_findings=total_findings,
         visible_count=len(visible_findings),
         cap_applied=cap_applied,

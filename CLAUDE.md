@@ -17,9 +17,12 @@ python3 -m pytest tests/test_checks.py::test_null_check -v  # run single test
 ruff check src/ tests/                      # lint
 ruff format src/ tests/                     # format
 
-# Brief CLIs
-python -m lens.brief.markdown <findings.json>          # render Slack-pasteable digest
-python -m lens.brief.feedback <finding_id> <label>     # append {real|false_positive|needs_more} to feedback.jsonl
+# The `lens` CLI (registered by pip install; see src/lens/cli.py)
+lens run <config.yaml>                      # one batch run: detect → group RCA → brief
+lens serve --output-dir out                 # serve brief.latest.html + capture button feedback
+lens feedback <finding_id> <label>          # append {real|false_positive|needs_more} to feedback.jsonl
+lens brief <findings.json>                  # render Slack-pasteable digest
+# python -m lens.brief.{markdown,feedback,serve} remain as module-form aliases
 ```
 
 The `eval` pytest marker (registered in `pyproject.toml`) gates real-LLM tests; they require `LENS_RUN_EVAL=1` and are excluded from the default CI command above. Run them explicitly with `pytest -m eval` when validating ingestion / RCA quality.
@@ -28,11 +31,15 @@ The `eval` pytest marker (registered in `pyproject.toml`) gates real-LLM tests; 
 
 ```
 src/lens/
-├── types.py             # Issue, Finding, RCAResult, CheckResult, SuiteResult, Severity, compute_finding_id
+├── types.py             # Issue, Finding, RCAResult, Severity, SEVERITY_ORDER, compute_finding_id, finding_group_key
 ├── engine.py            # Suite — runs a list of checks against one DataSource
-├── orchestrator.py      # DetectionOrchestrator — composes Suite + cross-source list, scores, dedupes, writes findings.json
-├── config.py            # YAML config loader → Suite
-├── scoring.py           # score_to_severity(raw_score, detector) → (Severity, confidence)
+├── orchestrator.py      # DetectionOrchestrator — composes Suite + cross-source list, scores, dedupes, agreement-boosts, applies feedback, writes findings.json
+├── cli.py               # `lens` console script: run / serve / feedback / brief
+├── run_config.py        # Run-config YAML loader → RunConfig (sources, suite, rca, feedback, brief)
+├── batch.py             # run_batch(RunConfig) — detect → group RCA → brief; what `lens run` executes
+├── feedback_loop.py     # apply_feedback — FP verdicts downgrade matching findings to INFO with expiry (ADR 0001)
+├── config.py            # YAML config loader → Suite (suite-only; run_config.py embeds this shape)
+├── scoring.py           # score_to_severity(raw_score, detector) → (Severity, confidence); has_thresholds()
 ├── io/                  # Data source connectors (DataSource ABC)
 │   ├── base.py          # Abstract DataSource with read/read_snapshot/read_history
 │   ├── polars_source.py # In-memory / CSV / Parquet
@@ -58,22 +65,25 @@ src/lens/
 │   ├── agent.py         # RCAAgent — per-finding, writes rca/<run_id>/<finding_id>.json
 │   ├── prompts.py       # RCA prompt template
 │   └── git_links.py     # GitHub/GitLab commit-URL helpers
-└── brief/               # Rendering
-    ├── html.py          # render_brief() — Jinja2 + autoescape, self-contained HTML
+└── brief/               # Rendering + capture
+    ├── html.py          # render_brief() — Jinja2 + autoescape, self-contained HTML; collapsed suppressed section
     ├── markdown.py      # render_brief_summary() — Slack-pasteable top-5 digest
-    ├── feedback.py      # CLI: append a label to feedback.jsonl
-    └── templates/       # Jinja2 templates + styles.css
+    ├── feedback.py      # append_feedback() + CLI; entries carry entity/field/detectors for the suppression loop
+    ├── serve.py         # `lens serve` — stdlib HTTP server: GET / → brief, POST /feedback → feedback.jsonl
+    └── templates/       # Jinja2 templates + styles.css (incl. one-click feedback buttons)
 ```
 
 The pipeline:
 
 ```
-lens-wiki/  →  DetectionOrchestrator  →  RCAAgent  →  HTML / markdown brief
+lens-wiki/  →  DetectionOrchestrator  →  RCAAgent (one per Finding Group)  →  HTML / markdown brief
 ```
 
 Two entry points:
-- **Scheduled batch** — `DetectionOrchestrator.run(...)` → RCA loop → `render_brief()` → HTML on disk. Designed for cron / morning brief.
+- **Scheduled batch** — `lens run <config.yaml>` (`lens.batch.run_batch`): orchestrate → one RCA per Finding Group at/above `rca.severity_floor` (ADR 0003) → `render_brief()` + `brief.latest.html` symlink + markdown digest on stdout. Designed for cron / morning brief; `examples/lending_demo/` is the worked example.
 - **Ad-hoc per-finding** — `.claude/commands/lens-rca.md` slash command. Given `--finding-id <id>`, looks it up in `findings.latest.json` and runs `RCAAgent.investigate(...)`. Given `--investigate-entity <id> --field <f> --date <d>`, synthesizes a finding-like wrapper and runs RCA directly — for investor questions or post-incident work, no orchestrator run needed.
+
+Domain vocabulary (Finding, Finding Group, Detector, Brief, …) is defined in `CONTEXT.md`; "detector" is canonical, "check" survives only in legacy identifiers. Load-bearing decisions are in `docs/adr/`.
 
 The older `/triage-data` skill (`.claude/commands/triage-data.md`) is a slimmer single-trace alternative built around `TabPFNAnomalyCheck` + a `LINEAGE.yaml` (schema in `docs/LINEAGE.md`). It coexists with the orchestrator pipeline — use it when you want one LLM trace over detection + RCA fused; use the orchestrator pipeline when you want pluggable detectors, dedup across them, severity/confidence scoring, and the HTML brief.
 
@@ -111,9 +121,10 @@ Update modes:
 `DetectionOrchestrator` composes the `Suite` for single-source checks plus a separate list of cross-source checks. On each `.run(...)`:
 1. Materializes every input source as `pl.LazyFrame`.
 2. Builds one `WikiCache` from `wiki_root` (empty cache if `None`) and shares it across every cross-source detector — wiki I/O happens once per run.
-3. Runs single-source checks against each source, then runs cross-source checks once over the full source dict via `run_cross(sources, *, wiki, entity_col, snapshot_col)`. Per-check failures are logged and skipped; the rest of the run continues.
-4. Scores every Issue and dedupes on `(entity_id, field_name, snapshot_date)` — the dedup key is the uuid5 `finding_id` computed by `compute_finding_id(...)`. The representative Issue is the highest-severity / highest-confidence member of the group; `Finding.detector_sources` lists every detector that flagged the point.
-5. Writes `findings.{run_id}.json` and atomically repoints `findings.latest.json` at it via `os.replace` on a temp symlink (safe under concurrent runs).
+3. Runs single-source checks against each source (a check added with `sources=[...]` only runs against those named sources), then runs cross-source checks once over the full source dict via `run_cross(sources, *, wiki, entity_col, snapshot_col)`. Per-check failures are logged and skipped; the rest of the run continues.
+4. Scores every Issue and dedupes on `(entity_id, field_name, snapshot_date)` — the dedup key is the uuid5 `finding_id` computed by `compute_finding_id(...)`. Detectors WITHOUT a row in `DEFAULT_THRESHOLDS` are self-scoring: their own severity/confidence is preserved (`null_check` ERROR stays ERROR). The representative Issue is the highest-severity / highest-confidence member of the group; `Finding.detector_sources` lists every detector that flagged the point. **Agreement boost:** when ≥2 distinct detector families flag the same point, confidence moves halfway toward 1.0 and `details["agreement_boost"]` records the families + pre-boost value.
+5. If `feedback_path` is supplied, applies analyst feedback (`lens.feedback_loop.apply_feedback`): unexpired false-positive verdicts downgrade matching `(entity, field)` findings to INFO — only when every flagging family was judged FP — stamping `details["suppressed_by_feedback"]`; never dropped (ADR 0001).
+6. Writes `findings.{run_id}.json` and atomically repoints `findings.latest.json` at it via `os.replace` on a temp symlink (safe under concurrent runs).
 
 Only the wiki-style cross-check signature is supported by the orchestrator. The two-frame `run_cross(source_a, source_b)` shape from `CrossSourceMatchCheck` is intentionally not wired in — cross-source matching belongs in a wiki rule.
 
@@ -133,11 +144,14 @@ All detectors register via `@registry.register`. The cross-source / classical-TS
 
 It then calls the LLM via the headless-mode pattern (below) and persists an `RCAResult` to `output_dir/rca/<run_id>/<finding_id>.json`. Same `LLMClient` Protocol as the wiki ingestion worker — tests substitute a stub client.
 
+In the batch path, RCA runs **once per Finding Group** — findings sharing `finding_group_key` = `(detector family, field)`, the same key the brief groups sections by (ADR 0003). `investigate(rep, ..., group=members)` adds group context (size, entities, severity mix, date span) to the prompt, and `run_batch` attaches the shared `RCAResult` to every member's finding_id. Suppressed findings never trigger RCA.
+
 ### Brief
 
-- `render_brief(findings, rcas, ...)` produces a self-contained HTML page using Jinja2 with `autoescape=select_autoescape` — LLM-authored hostile content in descriptions / hypotheses is escaped, not rendered. Findings are grouped by upstream / field and a "what changed since previous run" header diffs against the last brief.
-- `render_brief_summary(findings, ...)` produces a Slack-pasteable markdown digest of the top-5; expose via `python -m lens.brief.markdown`.
-- Feedback capture — the HTML brief has one-click `[real] / [false positive] / [needs more]` buttons that post to a local handler; `python -m lens.brief.feedback <finding_id> <label>` is the CLI equivalent. Both append a JSON line to `feedback.jsonl`.
+- `render_brief(findings, rcas, ...)` produces a self-contained HTML page using Jinja2 with `autoescape=select_autoescape` — LLM-authored hostile content in descriptions / hypotheses is escaped, not rendered. Findings are grouped by `finding_group_key` (one section per Finding Group) and a "what changed since previous run" header diffs against the last brief. Feedback-suppressed findings render in a collapsed section at the bottom; prior verdicts show as badges.
+- `render_brief_summary(findings, ...)` produces a Slack-pasteable markdown digest of the top-5; expose via `lens brief`.
+- Feedback capture — the HTML brief has one-click `[real] / [false positive] / [needs more]` buttons that POST to `lens serve` (`src/lens/brief/serve.py`), which appends to `feedback.jsonl` with the entity/field/detector context the suppression loop needs. Opened as a static file (no server), the buttons degrade to showing the equivalent `lens feedback` CLI command.
+- Feedback consumption — `lens.feedback_loop` (see Orchestrator step 5 and ADR 0001).
 
 ## LLM Access Pattern
 

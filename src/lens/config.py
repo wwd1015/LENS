@@ -7,9 +7,6 @@ from typing import Any
 
 import yaml
 
-from lens.engine import Suite
-from lens.types import Severity
-
 # Side-effect imports: ensure every built-in check is registered before
 # load_suite() looks them up by name. Without this, a fresh Python
 # interpreter loading a YAML suite would hit KeyError on the first check
@@ -20,6 +17,8 @@ from lens.checks import drill_down as _drill_down  # noqa: F401
 from lens.checks import snapshot as _snapshot  # noqa: F401
 from lens.checks import temporal as _temporal  # noqa: F401
 from lens.checks import temporal_stl as _temporal_stl  # noqa: F401
+from lens.engine import Suite
+from lens.types import Severity
 
 try:  # optional [tabpfn] extra
     from lens.checks import tabpfn_anomaly as _tabpfn_anomaly  # noqa: F401

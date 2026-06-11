@@ -20,6 +20,27 @@ class Severity(enum.Enum):
     CRITICAL = "critical"
 
 
+SEVERITY_ORDER: dict[Severity, int] = {
+    Severity.INFO: 0,
+    Severity.WARNING: 1,
+    Severity.ERROR: 2,
+    Severity.CRITICAL: 3,
+}
+"""Canonical severity ranking — higher is more urgent. Single source of truth
+for every module that sorts or floors by severity."""
+
+
+def detector_family(detector_source: str) -> str:
+    """Strip the rule-slug suffix off a namespaced detector identity.
+
+    ``cross_source_wiki:rule_a`` → ``cross_source_wiki``. Plain identities
+    pass through unchanged. Empty input yields ``"unknown"``.
+    """
+    if not detector_source:
+        return "unknown"
+    return detector_source.split(":", 1)[0]
+
+
 def compute_finding_id(
     entity_id: str | None,
     field_name: str | None,
@@ -111,6 +132,29 @@ class Finding:
     @property
     def finding_id(self) -> str:
         return self.issue.finding_id
+
+    @property
+    def detector_families(self) -> list[str]:
+        """Distinct detector families that flagged this point, stable order."""
+        seen: list[str] = []
+        for src in self.detector_sources or [self.issue.detector_source or self.issue.check_name]:
+            fam = detector_family(src)
+            if fam not in seen:
+                seen.append(fam)
+        return seen
+
+
+def finding_group_key(finding: Finding) -> tuple[str, str]:
+    """The Finding Group identity: ``(detector_family, field_name)``.
+
+    This is the unit at which the brief renders sections AND at which batch
+    RCA investigates (ADR 0003) — one investigation per group. The family is
+    taken from the first detector source so a multi-detector finding lands in
+    the group of whichever detector the dedup kept first.
+    """
+    families = finding.detector_families
+    family = families[0] if families else "unknown"
+    return (family, finding.issue.field_name or "")
 
 
 @dataclass

@@ -30,7 +30,9 @@ class PolarsSource(DataSource):
             if path.endswith(".parquet"):
                 self._lf = pl.scan_parquet(path)
             elif path.endswith(".csv"):
-                self._lf = pl.scan_csv(path)
+                # Parse ISO dates eagerly: a string snapshot_date would be
+                # silently dropped from compute_finding_id's dedup key.
+                self._lf = pl.scan_csv(path, try_parse_dates=True)
             else:
                 raise ValueError(f"Unsupported file format: {path}")
         else:

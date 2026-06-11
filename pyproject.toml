@@ -18,6 +18,9 @@ dependencies = [
     "statsmodels>=0.14",
 ]
 
+[project.scripts]
+lens = "lens.cli:main"
+
 [project.optional-dependencies]
 snowflake = ["snowflake-connector-python>=3.0", "polars[connectorx]"]
 tabpfn = ["tabpfn-time-series", "torch"]

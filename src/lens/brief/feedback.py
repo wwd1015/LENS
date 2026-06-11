@@ -70,6 +70,9 @@ def append_feedback(
     analyst: str | None = None,
     note: str | None = None,
     ts: datetime | None = None,
+    entity_id: str | None = None,
+    field_name: str | None = None,
+    detector_sources: list[str] | None = None,
 ) -> dict[str, Any]:
     """Append one feedback entry to ``output_path`` as a JSONL line.
 
@@ -88,6 +91,13 @@ def append_feedback(
         analyst: Optional analyst identifier (email, name, slack handle).
         note: Optional free-text rationale.
         ts: Override timestamp (defaults to ``datetime.now(timezone.utc)``).
+        entity_id: Optional entity the Finding refers to. Recording it makes
+            the entry self-contained for the suppression loop
+            (:mod:`lens.feedback_loop`) — otherwise the consumer must resolve
+            the finding_id against prior findings files.
+        field_name: Optional field the Finding refers to (see ``entity_id``).
+        detector_sources: Optional detector identities that flagged the
+            Finding; scopes false-positive suppression to those families.
 
     Returns:
         The entry dict that was written.
@@ -104,6 +114,12 @@ def append_feedback(
         "analyst": analyst,
         "note": note,
     }
+    if entity_id is not None:
+        entry["entity_id"] = entity_id
+    if field_name is not None:
+        entry["field_name"] = field_name
+    if detector_sources:
+        entry["detector_sources"] = list(detector_sources)
     line = (json.dumps(entry) + "\n").encode("utf-8")
 
     output_path = Path(output_path)
@@ -182,6 +198,24 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional free-text rationale.",
     )
+    parser.add_argument(
+        "--entity",
+        default=None,
+        help="Entity the Finding refers to (makes the entry self-contained "
+        "for the suppression loop).",
+    )
+    parser.add_argument(
+        "--field",
+        default=None,
+        help="Field the Finding refers to (see --entity).",
+    )
+    parser.add_argument(
+        "--detector",
+        action="append",
+        default=None,
+        help="Detector identity that flagged the Finding; repeatable. Scopes "
+        "false-positive suppression to these families.",
+    )
     return parser
 
 
@@ -201,6 +235,9 @@ def main(argv: list[str] | None = None) -> int:
             args.output,
             analyst=args.analyst,
             note=args.note,
+            entity_id=args.entity,
+            field_name=args.field,
+            detector_sources=args.detector,
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
