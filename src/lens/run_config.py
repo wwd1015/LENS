@@ -34,6 +34,10 @@ Example::
       enabled: true
       severity_floor: error                   # groups at/above get one RCA each
       repo_root: .                            # git log root for producing paths
+      max_investigations: 10                  # cost cap: at most N LLM calls/run
+      model: claude-haiku-4-5-20251001        # cheaper model for RCA (optional)
+      sample_rows: 5                          # data rows per prompt (context size)
+      max_commits: 5                          # commits per producing path
 
     feedback:
       path: feedback.jsonl
@@ -66,6 +70,18 @@ class RCAConfig:
     enabled: bool = True
     severity_floor: Severity = Severity.ERROR
     repo_root: Path = Path(".")
+    # --- token / cost controls -----------------------------------------
+    # Cap on the number of Finding Groups investigated per run; the highest
+    # severity/confidence groups are kept. None = no cap (every group above
+    # the floor). Each investigation is one LLM call, so this bounds the
+    # worst-case cost on an incident day.
+    max_investigations: int | None = None
+    # Model for RCA calls (passed to `claude -p --model`). Point at a cheaper
+    # model (e.g. a Haiku tier) to cut cost. None = Claude Code's default.
+    model: str | None = None
+    # Context-size knobs — fewer sampled rows / commits = smaller prompts.
+    sample_rows: int = 5
+    max_commits: int = 5
 
 
 @dataclass
@@ -223,12 +239,17 @@ def load_run_config(config_path: str | Path) -> RunConfig:
     output_dir = _resolve_path(str(cfg.get("output_dir", "out")), base)
 
     rca_raw = cfg.get("rca") or {}
+    max_inv = rca_raw.get("max_investigations")
     rca = RCAConfig(
         enabled=bool(rca_raw.get("enabled", True)),
         severity_floor=_parse_severity(
             rca_raw.get("severity_floor", "error"), context="rca.severity_floor"
         ),
         repo_root=_resolve_path(str(rca_raw.get("repo_root", ".")), base),
+        max_investigations=int(max_inv) if max_inv is not None else None,
+        model=str(rca_raw["model"]) if rca_raw.get("model") else None,
+        sample_rows=int(rca_raw.get("sample_rows", 5)),
+        max_commits=int(rca_raw.get("max_commits", 5)),
     )
 
     fb_raw = cfg.get("feedback") or {}

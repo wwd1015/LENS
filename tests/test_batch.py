@@ -112,6 +112,51 @@ def test_batch_floor_skips_groups(tmp_path):
     assert result.rcas == {}
 
 
+def test_batch_max_investigations_caps_llm_calls(tmp_path):
+    # Two fields with nulls → two null_check Finding Groups, both ERROR.
+    (tmp_path / "data.csv").write_text(
+        "entity_id,snapshot_date,status,note\na,2026-01-01,ok,hi\nb,2026-01-01,,\n",
+        encoding="utf-8",
+    )
+    cfg_path = tmp_path / "lens-run.yaml"
+    cfg_path.write_text(
+        """
+        sources: {loans: data.csv}
+        output_dir: out
+        checks:
+          - {name: null_check, params: {fields: [status, note]}}
+        rca: {severity_floor: error, max_investigations: 1, repo_root: .}
+        """,
+        encoding="utf-8",
+    )
+    cfg = load_run_config(cfg_path)
+    stub = StubLLM()
+
+    result = run_batch(cfg, run_id="cap", llm_client=stub)
+
+    # Two eligible groups, capped to 1 → exactly one LLM call.
+    assert result.rca_groups_investigated == 1
+    assert result.rca_groups_skipped_over_cap == 1
+    assert len(stub.prompts) == 1
+
+
+def test_build_rca_client_respects_model_and_injection(tmp_path):
+    from lens.batch import _build_rca_client
+    from lens.wiki.ingest import ClaudeCodeClient
+
+    cfg = _write_config(tmp_path)
+    cfg.rca.model = "claude-haiku-4-5-20251001"
+
+    # No injected client + model set → ClaudeCodeClient pinned to the model.
+    client = _build_rca_client(cfg, None)
+    assert isinstance(client, ClaudeCodeClient)
+    assert client.extra_args == ["--model", "claude-haiku-4-5-20251001"]
+
+    # Injected client always wins (model ignored).
+    stub = StubLLM()
+    assert _build_rca_client(cfg, stub) is stub
+
+
 def test_batch_rca_disabled(tmp_path):
     cfg = _write_config(tmp_path, rca_enabled=False)
     stub = StubLLM()
@@ -153,9 +198,7 @@ def test_batch_suppressed_findings_get_no_rca(tmp_path):
     result = run_batch(cfg, run_id="suppressed", llm_client=stub)
 
     assert stub.prompts == []  # suppressed findings never trigger RCA
-    assert all(
-        f.issue.severity is Severity.INFO for f in result.findings
-    )
+    assert all(f.issue.severity is Severity.INFO for f in result.findings)
     # Brief renders the suppressed section.
     html = result.brief_html_path.read_text(encoding="utf-8")
     assert "set aside earlier as false alarms" in html

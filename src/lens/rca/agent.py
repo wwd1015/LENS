@@ -396,11 +396,13 @@ def _format_declared_changes(wiki: WikiCache) -> tuple[str, list[str]]:
 def _format_commits_section(
     repo_root: Path,
     paths: list[str],
+    max_commits: int = 5,
 ) -> tuple[str, list[str]]:
     """Render the recent-commits section + collect commit URLs.
 
     Returns ``(rendered_section, list_of_commit_urls)``. URLs are only
     included when :func:`commit_url` returns a non-``None`` value.
+    ``max_commits`` bounds how many commits per path are walked.
     """
     if not paths:
         return "(no producing-code paths to walk)", []
@@ -409,7 +411,7 @@ def _format_commits_section(
     urls: list[str] = []
     seen_shas: set[str] = set()
     for path in paths:
-        commits = _git_log_for_path(repo_root, path, n=5)
+        commits = _git_log_for_path(repo_root, path, n=max_commits)
         if not commits:
             bullets.append(f"- path={path}: (no commit history available)")
             continue
@@ -549,6 +551,8 @@ class RCAAgent:
         snapshot_col: str = "snapshot_date",
         entity_col: str = "entity_id",
         group: list[Finding] | None = None,
+        sample_rows: int = 5,
+        max_commits: int = 5,
     ) -> RCAResult:
         """Synthesize an :class:`RCAResult` for one :class:`Finding`.
 
@@ -556,6 +560,10 @@ class RCAAgent:
         group's representative and the prompt carries the full group context —
         member count, entities, severity mix — so the hypothesis explains the
         incident, not just one entity.
+
+        ``sample_rows`` and ``max_commits`` bound the context size (and thus the
+        prompt token cost): how many anomalous/contrast data rows and how many
+        commits per producing path are included.
         """
         issue = finding.issue
 
@@ -564,7 +572,7 @@ class RCAAgent:
             finding_summary += "\n" + _summarize_group(group, finding)
 
         lf = _pick_source_lf(sources, issue)
-        if lf is not None:
+        if lf is not None and sample_rows > 0:
             anomalous_rows, contrast_rows = _sample_rows(
                 lf,
                 entity_id=issue.entity_id,
@@ -572,7 +580,7 @@ class RCAAgent:
                 snapshot_date=issue.snapshot_date,
                 snapshot_col=snapshot_col,
                 entity_col=entity_col,
-                n=5,
+                n=sample_rows,
             )
         else:
             anomalous_rows, contrast_rows = [], []
@@ -582,7 +590,9 @@ class RCAAgent:
 
         lineage_section, producing_paths = _format_lineage_section(wiki)
         rules_section = _format_rules_section(wiki, issue.field_name)
-        commits_section, commit_urls = _format_commits_section(self.repo_root, producing_paths)
+        commits_section, commit_urls = _format_commits_section(
+            self.repo_root, producing_paths, max_commits=max_commits
+        )
         # Lineage pages may also DECLARE recent producing-code changes (repo_url
         # + recent_changes), so RCA can link a real pipeline commit even when
         # that repo isn't checked out locally. Combine both sources.

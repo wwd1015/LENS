@@ -46,6 +46,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
             f", {result.rca_groups_skipped_below_floor} below severity floor"
             if result.rca_groups_skipped_below_floor
             else ""
+        )
+        + (
+            f", {result.rca_groups_skipped_over_cap} skipped over max_investigations cap"
+            if result.rca_groups_skipped_over_cap
+            else ""
         ),
         file=sys.stderr,
     )
@@ -58,7 +63,12 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     from lens.brief.serve import main as serve_main
 
     argv: list[str] = [
-        "--output-dir", str(args.output_dir), "--host", args.host, "--port", str(args.port),
+        "--output-dir",
+        str(args.output_dir),
+        "--host",
+        args.host,
+        "--port",
+        str(args.port),
     ]
     if args.feedback is not None:
         argv += ["--feedback", str(args.feedback)]
@@ -82,9 +92,7 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="lens",
         description="LENS — data quality surveillance for commercial lending data.",
     )
-    parser.add_argument(
-        "-v", "--verbose", action="store_true", help="Enable INFO-level logging."
-    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable INFO-level logging.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_run = sub.add_parser("run", help="Execute one batch run from a run-config YAML.")

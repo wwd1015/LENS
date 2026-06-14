@@ -108,8 +108,35 @@ def test_full_config_round_trip(tmp_path):
     assert cfg.rca.enabled is False
     assert cfg.rca.severity_floor is Severity.WARNING
     assert cfg.feedback.expiry_days == 30
+    # Cost controls default when unspecified.
+    assert cfg.rca.max_investigations is None
+    assert cfg.rca.model is None
+    assert cfg.rca.sample_rows == 5
+    assert cfg.rca.max_commits == 5
     assert cfg.brief.dataset_label == "Test portfolio"
     assert cfg.brief.top_n == 3
+
+
+def test_rca_cost_controls_parsed(tmp_path):
+    _touch_csv(tmp_path)
+    cfg = load_run_config(
+        _write(
+            tmp_path,
+            """
+            sources: {loans: data.csv}
+            rca:
+              severity_floor: error
+              max_investigations: 8
+              model: claude-haiku-4-5-20251001
+              sample_rows: 2
+              max_commits: 3
+            """,
+        )
+    )
+    assert cfg.rca.max_investigations == 8
+    assert cfg.rca.model == "claude-haiku-4-5-20251001"
+    assert cfg.rca.sample_rows == 2
+    assert cfg.rca.max_commits == 3
 
 
 def test_env_interpolation(tmp_path, monkeypatch):

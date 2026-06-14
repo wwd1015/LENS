@@ -31,7 +31,7 @@ from lens.rca.agent import RCAAgent
 from lens.run_config import RunConfig
 from lens.types import SEVERITY_ORDER, Finding, RCAResult, finding_group_key
 from lens.wiki.cache import WikiCache
-from lens.wiki.ingest import LLMClient
+from lens.wiki.ingest import ClaudeCodeClient, LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,7 @@ class BatchResult:
     markdown_digest: str = ""
     rca_groups_investigated: int = 0
     rca_groups_skipped_below_floor: int = 0
+    rca_groups_skipped_over_cap: int = 0
 
 
 def _build_orchestrator(cfg: RunConfig) -> DetectionOrchestrator:
@@ -57,6 +58,21 @@ def _build_orchestrator(cfg: RunConfig) -> DetectionOrchestrator:
     for spec in cfg.cross_checks:
         orch.add_cross(spec["name"], **spec["params"])
     return orch
+
+
+def _build_rca_client(cfg: RunConfig, llm_client: LLMClient | None) -> LLMClient | None:
+    """Pick the LLM client for RCA.
+
+    An injected client (tests) always wins. Otherwise, when ``rca.model`` is
+    set, build a :class:`ClaudeCodeClient` pinned to that model (e.g. a cheaper
+    tier) for cost control; else ``None`` lets :class:`RCAAgent` use its
+    default client.
+    """
+    if llm_client is not None:
+        return llm_client
+    if cfg.rca.model:
+        return ClaudeCodeClient(extra_args=["--model", cfg.rca.model])
+    return None
 
 
 def _group_for_rca(findings: list[Finding]) -> dict[tuple[str, str], list[Finding]]:
@@ -140,15 +156,34 @@ def run_batch(
         wiki = WikiCache.from_dir(cfg.wiki_root) if cfg.wiki_root else WikiCache()
         agent = RCAAgent(
             repo_root=cfg.rca.repo_root,
-            client=llm_client,
+            client=_build_rca_client(cfg, llm_client),
             output_dir=cfg.output_dir,
         )
         floor = SEVERITY_ORDER[cfg.rca.severity_floor]
-        for key, members in sorted(_group_for_rca(findings).items()):
+
+        # Collect groups above the floor, then keep the most important ones up
+        # to `max_investigations` — each investigation is one LLM call, so this
+        # bounds worst-case token cost on an incident day.
+        eligible: list[tuple[tuple[str, str], list[Finding], Finding]] = []
+        for key, members in _group_for_rca(findings).items():
             rep = _group_representative(members)
             if SEVERITY_ORDER.get(rep.issue.severity, -1) < floor:
                 result.rca_groups_skipped_below_floor += 1
                 continue
+            eligible.append((key, members, rep))
+        eligible.sort(
+            key=lambda t: (
+                -SEVERITY_ORDER.get(t[2].issue.severity, -1),
+                -float(t[2].issue.confidence or 0.0),
+                t[0],
+            )
+        )
+        cap = cfg.rca.max_investigations
+        if cap is not None and len(eligible) > cap:
+            result.rca_groups_skipped_over_cap = len(eligible) - cap
+            eligible = eligible[:cap]
+
+        for key, members, rep in eligible:
             try:
                 rca = agent.investigate(
                     rep,
@@ -157,6 +192,8 @@ def run_batch(
                     snapshot_col=cfg.snapshot_col,
                     entity_col=cfg.entity_col,
                     group=members,
+                    sample_rows=cfg.rca.sample_rows,
+                    max_commits=cfg.rca.max_commits,
                 )
                 agent.save(rca, actual_run_id)
             except Exception as exc:  # noqa: BLE001 - one bad group must not kill the brief
