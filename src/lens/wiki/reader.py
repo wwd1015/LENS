@@ -95,6 +95,25 @@ class LineagePage:
         value = self.frontmatter.get("producing_code", []) or []
         return [str(p) for p in value]
 
+    @property
+    def repo_url(self) -> str:
+        """Base URL of the data-pipeline repo that produces this table.
+
+        Lets RCA link to a known recent change even when the pipeline repo
+        isn't checked out locally (so live ``git log`` isn't available).
+        """
+        return str(self.frontmatter.get("repo_url", "") or "")
+
+    @property
+    def recent_changes(self) -> list[dict[str, Any]]:
+        """Declared recent commits to the producing code.
+
+        Each entry: ``{commit, date, message}``. The RCA agent turns these
+        into commit-URL references using :pyattr:`repo_url`.
+        """
+        value = self.frontmatter.get("recent_changes", []) or []
+        return [v for v in value if isinstance(v, dict)]
+
 
 # Marker type — referenced only to satisfy default-factory typing in dataclasses
 # (none currently use it but kept for symmetry with types.py style).

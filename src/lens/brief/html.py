@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,223 @@ _SEVERITY_RANK: dict[Severity, int] = {
     Severity.WARNING: 1,
     Severity.INFO: 0,
 }
+
+# ---------------------------------------------------------------------------
+# Plain-language layer — translate detector / severity jargon into something a
+# non-technical analyst can read at a glance. Keys are detector FAMILIES (the
+# part before the ':' in a detector_source). Values: (headline, what-it-means).
+# ---------------------------------------------------------------------------
+_DETECTOR_FRIENDLY: dict[str, tuple[str, str]] = {
+    "null_check": (
+        "Missing information",
+        "A value that should be filled in was left blank.",
+    ),
+    "range_check": (
+        "Number outside the expected range",
+        "A figure is higher or lower than the limits set for it.",
+    ),
+    "stale_data": (
+        "Figure hasn't updated",
+        "A value stayed the same across dates when it was expected to change.",
+    ),
+    "monotonicity": (
+        "Moved in the wrong direction",
+        "A running total went down when it should only ever go up (or vice-versa).",
+    ),
+    "volatility": (
+        "Unusually big jump between dates",
+        "A value changed far more from one date to the next than it normally does.",
+    ),
+    "stl_residual": (
+        "Doesn't match its recent trend",
+        "This figure broke from the steady month-to-month pattern it had followed.",
+    ),
+    "tabpfn_anomaly": (
+        "Unexpected value for this series",
+        "A forecasting model expected a very different number here.",
+    ),
+    "hierarchical_drill_down": (
+        "One segment is driving the swing",
+        "A specific slice of the portfolio is behind a larger overall movement.",
+    ),
+    "cross_source_wiki": (
+        "Two systems don't agree",
+        "Numbers that should match across systems are off by more than allowed.",
+    ),
+    "cross_source_match": (
+        "Two systems don't agree",
+        "The same figure is recorded differently in two places.",
+    ),
+}
+_GENERIC_FRIENDLY: tuple[str, str] = (
+    "Possible data problem",
+    "An automated check flagged this value for review.",
+)
+
+# Plain meaning for each severity, shown as a pill instead of a bare label.
+_SEVERITY_MEANING: dict[str, str] = {
+    "critical": "Needs urgent attention",
+    "error": "Likely a real problem",
+    "warning": "Worth a look",
+    "info": "For your awareness",
+}
+
+# How an earlier analyst verdict reads back on an ongoing finding.
+_PRIOR_FEEDBACK_HUMAN: dict[str, str] = {
+    "real": "an analyst confirmed this is real",
+    "false_positive": "an analyst marked this a false alarm",
+    "needs_more": "an analyst asked for a closer look",
+}
+
+_MONTHS = (
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+)
+
+_URL_RE = re.compile(r"https?://[^\s<>\"')]+")
+
+
+def _detector_friendly(family: str) -> tuple[str, str]:
+    return _DETECTOR_FRIENDLY.get(family, _GENERIC_FRIENDLY)
+
+
+def _humanize_field(field: str) -> str:
+    """``advance_rate`` → ``Advance rate``; empty stays empty."""
+    if not field:
+        return ""
+    return field.replace("_", " ").strip().capitalize()
+
+
+def _humanize_date(value: Any) -> str:
+    """Render any date-ish value as ``Jun 30, 2026``; fall back to its string."""
+    if value is None:
+        return ""
+    iso = value.isoformat() if hasattr(value, "isoformat") else str(value)
+    try:
+        d = date.fromisoformat(iso[:10])
+    except (ValueError, TypeError):
+        return str(value)
+    return f"{_MONTHS[d.month - 1]} {d.day}, {d.year}"
+
+
+def _linkify_segments(text: str) -> list[dict[str, str]]:
+    """Split prose into ``{"text": ...}`` / ``{"url": ...}`` segments.
+
+    The template renders text through autoescape and URLs as ``<a>`` tags, so
+    a model-supplied link becomes clickable in place without ever marking raw
+    LLM output as ``safe``.
+    """
+    segments: list[dict[str, str]] = []
+    last = 0
+    for m in _URL_RE.finditer(text):
+        if m.start() > last:
+            segments.append({"text": text[last : m.start()]})
+        segments.append({"url": m.group(0)})
+        last = m.end()
+    if last < len(text):
+        segments.append({"text": text[last:]})
+    return segments or [{"text": text}]
+
+
+def _friendly_link_label(url: str) -> str:
+    if "/commit/" in url:
+        sha = url.rsplit("/commit/", 1)[-1].strip("/")[:8]
+        suffix = f" ({sha})" if sha else ""
+        return f"See the data-pipeline change that may have caused this{suffix}"
+    if "/blob/" in url or "/tree/" in url or "/-/blob/" in url:
+        return "Open the data-pipeline code that builds this data"
+    return "Open reference"
+
+
+def _fmt_num(value: Any) -> str:
+    """Format a number for a non-technical reader.
+
+    Big numbers get thousands separators (``2905000`` → ``2,905,000``); whole
+    numbers drop the decimal; small fractions render naturally (``0.75``).
+    Non-numbers pass through as their string form.
+    """
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if x == int(x):
+        return f"{int(x):,}"
+    if abs(x) >= 1000:
+        return f"{x:,.2f}"
+    return f"{x:g}"
+
+
+def _tech_breakdown(details: dict[str, Any]) -> dict[str, Any] | None:
+    """Build a reproducible calculation view from a cross-source finding.
+
+    Returns ``None`` for findings that don't carry a structured equation
+    breakdown (e.g. statistical detectors) — the template falls back to the
+    raw description there.
+    """
+    if "lhs" not in details or "rhs" not in details:
+        return None
+    lhs = details["lhs"]
+    rhs = details["rhs"]
+    terms = [
+        {"label": t.get("label", ""), "value": _fmt_num(t.get("value"))}
+        for t in (details.get("terms") or [])
+        if isinstance(t, dict)
+    ]
+    tol = details.get("tolerance")
+    tol_type = details.get("tolerance_type")
+    if tol is None:
+        tolerance_str = ""
+    elif tol_type == "relative":
+        tolerance_str = f"{float(tol) * 100:g}%"
+    else:
+        tolerance_str = _fmt_num(tol)
+    try:
+        abs_diff = abs(float(lhs) - float(rhs))
+        pct = f"{abs(float(details.get('diff', 0.0))) * 100:.1f}%"
+    except (TypeError, ValueError):
+        abs_diff, pct = None, ""
+    return {
+        "rule": details.get("rule", ""),
+        "formula": details.get("formula", ""),
+        "lhs_label": details.get("lhs_label", ""),
+        "rhs_label": details.get("rhs_label", ""),
+        "op_symbol": details.get("rhs_op_symbol"),
+        "lhs_value": _fmt_num(lhs),
+        "rhs_value": _fmt_num(rhs),
+        "terms": terms,
+        "abs_diff": _fmt_num(abs_diff) if abs_diff is not None else "",
+        "pct": pct,
+        "tolerance": tolerance_str,
+    }
+
+
+def _classify_references(refs: list[str]) -> tuple[list[dict[str, str]], list[str]]:
+    """Split RCA references into clickable links and plain-text context chips."""
+    links: list[dict[str, str]] = []
+    context: list[str] = []
+    seen: set[str] = set()
+    for ref in refs:
+        if not isinstance(ref, str) or not ref.strip():
+            continue
+        urls = _URL_RE.findall(ref)
+        if urls:
+            for url in urls:
+                if url not in seen:
+                    seen.add(url)
+                    links.append({"url": url, "label": _friendly_link_label(url)})
+        else:
+            context.append(ref.strip())
+    return links, context
 
 
 @dataclass
@@ -90,9 +308,7 @@ def _read_prior_finding_ids(prior_findings_path: Path | None) -> set[str] | None
     return ids
 
 
-def _compute_delta(
-    current: list[Finding], prior_ids: set[str] | None
-) -> dict[str, int] | None:
+def _compute_delta(current: list[Finding], prior_ids: set[str] | None) -> dict[str, int] | None:
     """Compute the new/resolved/ongoing counts vs. a prior run.
 
     Returns ``None`` when there is no prior run (the template suppresses the
@@ -125,8 +341,10 @@ def _group_findings(findings: list[Finding]) -> list[_GroupView]:
 
     groups: list[_GroupView] = []
     for (prefix, field), members in buckets.items():
-        # Already sorted within bucket because we grouped post-sort.
-        label = f"{prefix} / {field}" if field else prefix
+        # Already sorted within bucket because we grouped post-sort. Use the
+        # plain-language headline for the detector family rather than its code.
+        headline = _detector_friendly(prefix)[0]
+        label = f"{headline} — {_humanize_field(field)}" if field else headline
         groups.append(
             _GroupView(
                 label=label,
@@ -181,32 +399,53 @@ def _finding_view(f: Finding, rcas: dict[str, RCAResult]) -> dict[str, Any]:
     details = issue.details or {}
     suppression = details.get("suppressed_by_feedback")
     prior_feedback = details.get("prior_feedback")
+
+    families = f.detector_families
+    primary_family = families[0] if families else "unknown"
+    title, subtitle = _detector_friendly(primary_family)
+
+    prior_label = prior_feedback.get("label") if isinstance(prior_feedback, dict) else None
+
+    rca_view: dict[str, Any] | None = None
+    if rca is not None:
+        inline_urls: set[str] = set()
+        cause_segments = _linkify_segments(str(rca.hypothesis))
+        inline_urls.update(s["url"] for s in cause_segments if "url" in s)
+        evidence_views: list[list[dict[str, str]]] = []
+        for ev in rca.evidence:
+            segs = _linkify_segments(str(ev))
+            inline_urls.update(s["url"] for s in segs if "url" in s)
+            evidence_views.append(segs)
+        ref_links, context_refs = _classify_references(list(rca.references))
+        # Don't repeat a link as a button if it already appears inline in the
+        # cause or the reasoning.
+        ref_links = [link for link in ref_links if link["url"] not in inline_urls]
+        rca_view = {
+            "cause_segments": cause_segments,
+            "evidence": evidence_views,
+            "links": ref_links,
+            "context_refs": context_refs,
+            "confidence_pct": round(float(rca.confidence or 0.0) * 100),
+        }
+
     return {
         "finding_id": f.finding_id,
         "suppression": dict(suppression) if isinstance(suppression, dict) else None,
-        "prior_feedback": dict(prior_feedback) if isinstance(prior_feedback, dict) else None,
+        "prior_feedback_human": _PRIOR_FEEDBACK_HUMAN.get(prior_label) if prior_label else None,
         "severity": issue.severity.value,
-        "severity_upper": issue.severity.value.upper(),
-        "confidence": float(issue.confidence or 0.0),
+        "severity_meaning": _SEVERITY_MEANING.get(issue.severity.value, ""),
+        "title": title,
+        "subtitle": subtitle,
+        "confidence_pct": round(float(issue.confidence or 0.0) * 100),
         "entity_id": issue.entity_id or "",
+        "field_human": _humanize_field(issue.field_name or ""),
         "field_name": issue.field_name or "",
-        "snapshot_date": (
-            issue.snapshot_date.isoformat()
-            if hasattr(issue.snapshot_date, "isoformat") and issue.snapshot_date is not None
-            else (str(issue.snapshot_date) if issue.snapshot_date else "")
-        ),
+        "date_human": _humanize_date(issue.snapshot_date),
+        "check_count": len(families),
         "description": issue.description or "",
-        "detector_sources": list(f.detector_sources),
-        "rca": (
-            {
-                "hypothesis": rca.hypothesis,
-                "evidence": list(rca.evidence),
-                "references": list(rca.references),
-                "confidence": float(rca.confidence or 0.0),
-            }
-            if rca is not None
-            else None
-        ),
+        "tech": _tech_breakdown(details),
+        "detectors_csv": ",".join(f.detector_sources),
+        "rca": rca_view,
     }
 
 
@@ -261,19 +500,19 @@ def render_brief(
     # headers.
     groups = _group_findings(visible_findings)
 
-    # Build view models for each group.
+    # Build view models for each group. `top_severity` drives the colored
+    # count dot in the sidebar table of contents.
     group_views = [
         {
             "label": g.label,
             "total_in_group": g.total_in_group,
+            "top_severity": g.findings_in_group[0].issue.severity.value,
             "findings_in_group": [_finding_view(f, rcas) for f in g.findings_in_group],
         }
         for g in groups
     ]
 
-    suppressed_views = [
-        _finding_view(f, rcas) for f in sorted(suppressed_findings, key=_sort_key)
-    ]
+    suppressed_views = [_finding_view(f, rcas) for f in sorted(suppressed_findings, key=_sort_key)]
 
     # Delta vs. prior — None when no prior path was given.
     prior_ids = _read_prior_finding_ids(prior_findings_path)

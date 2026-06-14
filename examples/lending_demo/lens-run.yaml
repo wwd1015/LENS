@@ -25,12 +25,15 @@ cross_checks:
 rca:
   enabled: true
   severity_floor: error
-  repo_root: ../.. # the LENS repo itself — lineage paths are repo-relative
+  # The producing code lives in a separate data-pipeline repo, declared on the
+  # lineage page (repo_url + recent_changes). RCA links the pipeline commit
+  # from that declaration; it does not point at LENS's own source.
+  repo_root: ../..
 
 feedback:
   path: out/feedback.jsonl
   expiry_days: 90
 
 brief:
-  dataset_label: "Lending demo portfolio"
+  dataset_label: "Northwind Capital — lending portfolio"
   top_n: 5

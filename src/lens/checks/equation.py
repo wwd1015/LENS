@@ -88,6 +88,75 @@ def _evaluate_leaf(
     return grouped.select(entity_col, snapshot_col, "__value__")
 
 
+_OP_SYMBOL = {"add": "+", "sub": "−", "mul": "×", "div": "÷"}
+
+
+def node_label(node: dict[str, Any]) -> str:
+    """Render an equation node as a human-readable expression.
+
+    Leaf ``{table: senior_debt, field: balance}`` → ``senior_debt.balance``;
+    an aggregated leaf → ``sum(loan_pool.balance per deal_id)``; a compound
+    node → ``(<left> × <right>)``. Used to explain a rule in the brief.
+    """
+    if not isinstance(node, dict):
+        return str(node)
+    if _is_leaf(node):
+        base = f"{node['table']}.{node['field']}"
+        agg = node.get("agg")
+        if agg:
+            group_by = node.get("group_by")
+            inner = base + (f" per {group_by}" if group_by else "")
+            return f"{agg}({inner})"
+        return base
+    op = node.get("op")
+    sym = _OP_SYMBOL.get(op, str(op))
+    args = node.get("args") or []
+    if len(args) == 2:
+        return f"{node_label(args[0])} {sym} {node_label(args[1])}"
+    return sym
+
+
+def equation_formula(eq: dict[str, Any]) -> str:
+    """One-line ``lhs = rhs`` rendering of a rule's equation."""
+    return f"{node_label(eq.get('lhs', {}))} = {node_label(eq.get('rhs', {}))}"
+
+
+def evaluate_terms(
+    eq: dict[str, Any],
+    sources: dict[str, pl.LazyFrame],
+    entity_col: str,
+    snapshot_col: str,
+) -> tuple[list[str], str | None, pl.LazyFrame]:
+    """Evaluate the top-level operands of a rule's ``rhs``.
+
+    Returns ``(labels, op_symbol, frame)`` where ``frame`` has columns
+    ``[entity_col, snapshot_col, "__term0__", "__term1__", ...]`` — one term
+    column per top-level operand. For a leaf ``rhs`` there is a single term and
+    ``op_symbol`` is ``None``. This lets the brief show the actual operand
+    values (e.g. ``2,905,000 × 0.75``) so a reader can replay the math.
+    """
+    rhs = eq.get("rhs", {}) or {}
+    if _is_leaf(rhs):
+        nodes = [rhs]
+        op_symbol = None
+    else:
+        nodes = rhs.get("args") or []
+        op_symbol = _OP_SYMBOL.get(rhs.get("op"))
+
+    labels = [node_label(n) for n in nodes]
+    frame: pl.LazyFrame | None = None
+    for idx, node in enumerate(nodes):
+        term = evaluate_node(node, sources, entity_col, snapshot_col).rename(
+            {"__value__": f"__term{idx}__"}
+        )
+        frame = (
+            term if frame is None else frame.join(term, on=[entity_col, snapshot_col], how="inner")
+        )
+    if frame is None:
+        frame = pl.LazyFrame({entity_col: [], snapshot_col: []})
+    return labels, op_symbol, frame
+
+
 def _apply_op(op: str, a: pl.Expr, b: pl.Expr) -> pl.Expr:
     if op == "add":
         return a + b
@@ -122,13 +191,9 @@ def evaluate_node(
     args = node.get("args")
 
     if op not in _VALID_OPS:
-        raise ValueError(
-            f"Unknown op '{op}' in compound node. Valid ops: {sorted(_VALID_OPS)}"
-        )
+        raise ValueError(f"Unknown op '{op}' in compound node. Valid ops: {sorted(_VALID_OPS)}")
     if not isinstance(args, list) or len(args) != 2:
-        raise ValueError(
-            f"Compound node with op '{op}' must have exactly 2 args, got {args!r}"
-        )
+        raise ValueError(f"Compound node with op '{op}' must have exactly 2 args, got {args!r}")
 
     left = evaluate_node(args[0], sources, entity_col, snapshot_col)
     right = evaluate_node(args[1], sources, entity_col, snapshot_col)
@@ -159,16 +224,12 @@ def evaluate_equation(
     required = {"lhs", "rhs", "tolerance", "tolerance_type"}
     missing = required - set(eq or {})
     if missing:
-        raise ValueError(
-            f"Equation spec is missing required keys: {sorted(missing)}"
-        )
+        raise ValueError(f"Equation spec is missing required keys: {sorted(missing)}")
 
     tolerance = eq["tolerance"]
     tol_type = eq["tolerance_type"]
     if tol_type not in ("absolute", "relative"):
-        raise ValueError(
-            f"tolerance_type must be 'absolute' or 'relative', got {tol_type!r}"
-        )
+        raise ValueError(f"tolerance_type must be 'absolute' or 'relative', got {tol_type!r}")
 
     lhs_lf = evaluate_node(eq["lhs"], sources, entity_col, snapshot_col).rename(
         {"__value__": "__lhs__"}
@@ -188,12 +249,12 @@ def evaluate_equation(
     else:
         # relative — divide by |lhs|; guard against zero lhs by treating
         # 0-vs-nonzero as an infinite relative diff (always flagged).
-        diff_expr = pl.when(lhs_e == 0).then(
-            pl.when(rhs_e == 0).then(0.0).otherwise(float("inf"))
-        ).otherwise(abs_diff / lhs_e.abs())
+        diff_expr = (
+            pl.when(lhs_e == 0)
+            .then(pl.when(rhs_e == 0).then(0.0).otherwise(float("inf")))
+            .otherwise(abs_diff / lhs_e.abs())
+        )
 
     with_diff = joined.with_columns(diff_expr.alias("__diff__"))
     violations = with_diff.filter(pl.col("__diff__") > tolerance)
-    return violations.select(
-        entity_col, snapshot_col, "__lhs__", "__rhs__", "__diff__"
-    )
+    return violations.select(entity_col, snapshot_col, "__lhs__", "__rhs__", "__diff__")

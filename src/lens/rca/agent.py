@@ -52,11 +52,7 @@ _ANY_FENCE_RE = re.compile(r"```(?:[a-zA-Z]+)?\s*\n(.*?)```", re.DOTALL)
 def _summarize_finding(finding: Finding) -> str:
     """One-paragraph description of the wrapped :class:`Issue`."""
     issue = finding.issue
-    detectors = (
-        ", ".join(finding.detector_sources)
-        or issue.detector_source
-        or issue.check_name
-    )
+    detectors = ", ".join(finding.detector_sources) or issue.detector_source or issue.check_name
     lines = [
         f"finding_id: {finding.finding_id}",
         f"check: {issue.check_name}",
@@ -198,11 +194,7 @@ def _sample_rows(
             mask = pl.col(snapshot_col) < snapshot_date
             if have_entity:
                 mask = mask & (pl.col(entity_col) == entity_id)
-            contrast_df = (
-                df.filter(mask)
-                .sort(snapshot_col, descending=True)
-                .head(n)
-            )
+            contrast_df = df.filter(mask).sort(snapshot_col, descending=True).head(n)
             contrast = contrast_df.to_dicts()
         elif have_entity:
             # No snapshot column → fall back to other rows for the entity.
@@ -354,6 +346,51 @@ def _git_log_for_path(
         if len(parts) == 3:
             commits.append((parts[0], parts[1], parts[2]))
     return commits
+
+
+def _stable_str_dedupe(items: list[str]) -> list[str]:
+    """Order-preserving dedupe for reference URL lists."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        if item and item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
+
+
+def _format_declared_changes(wiki: WikiCache) -> tuple[str, list[str]]:
+    """Render producing-code changes DECLARED on lineage pages.
+
+    A lineage page can carry ``repo_url`` plus a ``recent_changes`` list of
+    ``{commit, date, message}``. This surfaces them (and builds commit URLs)
+    so RCA can point at the actual data-pipeline change without a local
+    checkout of that repo. Returns ``(rendered_section, list_of_urls)``.
+    """
+    bullets: list[str] = []
+    urls: list[str] = []
+    for table, page in sorted(wiki.lineages.items()):
+        changes = page.recent_changes
+        if not changes:
+            continue
+        repo = page.repo_url
+        bullets.append(f"- {table} (pipeline repo: {repo or 'n/a'}):")
+        for idx, change in enumerate(changes):
+            commit = str(change.get("commit", "")).strip()
+            date = change.get("date", "")
+            message = change.get("message", "")
+            url = f"{repo.rstrip('/')}/commit/{commit}" if (repo and commit) else None
+            url_part = f" [{url}]" if url else ""
+            bullets.append(f"    - {commit[:12]} | {date} | {message}{url_part}")
+            # Only the most-recent change per page becomes a clickable
+            # reference, so the brief surfaces one likely culprit rather than
+            # every historical commit. Older changes stay in the prompt text.
+            if url and idx == 0:
+                urls.append(url)
+    if not bullets:
+        return "", []
+    header = "Declared recent changes to producing code (from lineage pages):"
+    return header + "\n" + "\n".join(bullets), urls
 
 
 def _format_commits_section(
@@ -545,9 +582,14 @@ class RCAAgent:
 
         lineage_section, producing_paths = _format_lineage_section(wiki)
         rules_section = _format_rules_section(wiki, issue.field_name)
-        commits_section, commit_urls = _format_commits_section(
-            self.repo_root, producing_paths
-        )
+        commits_section, commit_urls = _format_commits_section(self.repo_root, producing_paths)
+        # Lineage pages may also DECLARE recent producing-code changes (repo_url
+        # + recent_changes), so RCA can link a real pipeline commit even when
+        # that repo isn't checked out locally. Combine both sources.
+        declared_section, declared_urls = _format_declared_changes(wiki)
+        if declared_section:
+            commits_section = f"{commits_section}\n\n{declared_section}"
+        commit_urls = _stable_str_dedupe(commit_urls + declared_urls)
 
         prompt = RCA_PROMPT.format(
             finding_summary=finding_summary,
@@ -596,9 +638,7 @@ class RCAAgent:
         dest_dir.mkdir(parents=True, exist_ok=True)
         out_path = dest_dir / f"{rca.finding_id}.json"
 
-        tmp_path = out_path.with_name(
-            f"{out_path.name}.tmp.{os.getpid()}.{secrets.token_hex(4)}"
-        )
+        tmp_path = out_path.with_name(f"{out_path.name}.tmp.{os.getpid()}.{secrets.token_hex(4)}")
         payload = asdict(rca)
         tmp_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
         os.replace(tmp_path, out_path)

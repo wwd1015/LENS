@@ -46,8 +46,9 @@ A relative tolerance of 0.1% absorbs rounding; anything beyond is a real mismatc
 
 ## Where it lives in production
 
-`examples/lending_demo/transforms/build_senior_debt.sql` — see
-`../lineage/senior-debt.lineage.md`.
+Built by the Northwind Capital data pipeline, model `models/senior_debt.sql`
+— see `../lineage/senior-debt.lineage.md` for the producing repo and its
+recent changes.
 
 ## When it might break
 

@@ -17,6 +17,7 @@ from typing import Any
 
 import polars as pl
 
+from lens.checks import equation
 from lens.checks.base import BaseCheck
 from lens.checks.equation import evaluate_equation
 from lens.checks.registry import registry
@@ -63,8 +64,7 @@ class CrossSourceWikiCheck(BaseCheck):
         snapshot_col: str = "snapshot_date",
     ) -> CheckResult:
         raise NotImplementedError(
-            "CrossSourceWikiCheck requires multiple sources and a WikiCache. "
-            "Use run_cross()."
+            "CrossSourceWikiCheck requires multiple sources and a WikiCache. Use run_cross()."
         )
 
     def run_cross(
@@ -87,9 +87,7 @@ class CrossSourceWikiCheck(BaseCheck):
         for rule in wiki.all_rules():
             eq = rule.equation
             if not eq:
-                logger.warning(
-                    "cross_source_wiki: rule '%s' has no equation; skipping", rule.name
-                )
+                logger.warning("cross_source_wiki: rule '%s' has no equation; skipping", rule.name)
                 continue
 
             referenced: set[str] = set()
@@ -106,9 +104,7 @@ class CrossSourceWikiCheck(BaseCheck):
                 continue
 
             try:
-                violations_lf = evaluate_equation(
-                    eq, sources, entity_col, snapshot_col
-                )
+                violations_lf = evaluate_equation(eq, sources, entity_col, snapshot_col)
                 violations = violations_lf.collect()
             except (ValueError, KeyError) as exc:
                 logger.warning(
@@ -121,7 +117,18 @@ class CrossSourceWikiCheck(BaseCheck):
             lhs_node = eq.get("lhs", {}) or {}
             field_name = lhs_node.get("field") if isinstance(lhs_node, dict) else None
 
+            # Operand breakdown — the actual values feeding the rhs, so a
+            # reader can replay the math (e.g. 2,905,000 × 0.75 = 2,178,750).
+            term_lookup, term_labels, op_symbol = self._term_breakdown(
+                eq, sources, entity_col, snapshot_col
+            )
+            lhs_label = equation.node_label(lhs_node)
+            rhs_label = equation.node_label(eq.get("rhs", {}) or {})
+            formula = equation.equation_formula(eq)
+
             for row in violations.iter_rows(named=True):
+                key = (row[entity_col], row[snapshot_col])
+                term_values = term_lookup.get(key, [])
                 issues.append(
                     Issue(
                         check_name=self.name,
@@ -139,12 +146,48 @@ class CrossSourceWikiCheck(BaseCheck):
                             "rhs": float(row["__rhs__"]),
                             "diff": float(row["__diff__"]),
                             "rule": rule.name,
+                            "formula": formula,
+                            "lhs_label": lhs_label,
+                            "rhs_label": rhs_label,
+                            "rhs_op_symbol": op_symbol,
+                            "terms": [
+                                {"label": lbl, "value": val}
+                                for lbl, val in zip(term_labels, term_values)
+                            ],
+                            "tolerance": eq.get("tolerance"),
+                            "tolerance_type": eq.get("tolerance_type"),
                         },
                         confidence=1.0,
                         detector_source=f"cross_source_wiki:{rule.name}",
                     )
                 )
 
-        return CheckResult(
-            check_name=self.name, passed=len(issues) == 0, issues=issues
-        )
+        return CheckResult(check_name=self.name, passed=len(issues) == 0, issues=issues)
+
+    @staticmethod
+    def _term_breakdown(
+        eq: dict[str, Any],
+        sources: dict[str, pl.LazyFrame],
+        entity_col: str,
+        snapshot_col: str,
+    ) -> tuple[dict[tuple[Any, Any], list[float]], list[str], str | None]:
+        """Materialize the rhs operand values keyed by ``(entity, snapshot)``.
+
+        Best-effort: any failure yields an empty lookup so the rest of the
+        finding (lhs/rhs/diff) still renders. Returns
+        ``(lookup, labels, op_symbol)``.
+        """
+        try:
+            labels, op_symbol, terms_lf = equation.evaluate_terms(
+                eq, sources, entity_col, snapshot_col
+            )
+            terms_df = terms_lf.collect()
+        except Exception as exc:  # noqa: BLE001 - breakdown is non-essential
+            logger.debug("cross_source_wiki: term breakdown unavailable: %s", exc)
+            return {}, [], None
+
+        term_cols = [c for c in terms_df.columns if c.startswith("__term")]
+        lookup: dict[tuple[Any, Any], list[float]] = {}
+        for r in terms_df.iter_rows(named=True):
+            lookup[(r[entity_col], r[snapshot_col])] = [float(r[c]) for c in term_cols]
+        return lookup, labels, op_symbol

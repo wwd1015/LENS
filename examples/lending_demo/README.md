@@ -1,12 +1,18 @@
 # Lending demo — end-to-end LENS run on synthetic data
 
-A fully-worked batch run: three deals, 18 monthly snapshots, a hand-authored
-wiki, and two planted anomalies on the final snapshot (2026-06-30):
+A fully-worked batch run for a fictional lender ("Northwind Capital"): three
+deals, 18 monthly snapshots, a hand-authored wiki, and two planted anomalies on
+the final snapshot (2026-06-30):
 
 | Planted anomaly | Detector(s) that catch it |
 |---|---|
-| Deal **D2**'s senior-debt balance inflated 12% | `cross_source_wiki` (the `senior-debt-equals-pool-x-advance-rate` rule) **and** `stl_residual` — two independent families agree, so the finding gets the orchestrator's agreement confidence boost |
-| Two of deal **D3**'s loans have a null `status` | `null_check` |
+| **Sterling Mid-Market Fund II**'s senior-debt balance inflated 12% | `cross_source_wiki` (the `senior-debt-equals-pool-x-advance-rate` rule) **and** `stl_residual` — two independent families agree, so the finding gets the orchestrator's agreement confidence boost |
+| Two of **Granite Peak Direct Lending**'s borrowers have a null `status` | `null_check` |
+
+The breach is no accident: the lineage page declares the pipeline commit that
+caused it (`TICKET-4821`, a hand-entered Q2 advance-rate override), so the RCA
+agent traces the anomaly back to a realistic data-pipeline change — and the
+brief links that commit, not LENS's own code.
 
 ## Run it
 
@@ -45,6 +51,8 @@ dropped — and resurfaces automatically after `feedback.expiry_days`.
 - `data/*.csv` — synthetic data; regenerate with
   `python examples/lending_demo/generate_data.py`
 - `wiki/` — hand-authored dataset / rule / lineage pages; the rule's
-  structured `equation` frontmatter is what `cross_source_wiki` evaluates
-- `transforms/build_senior_debt.sql` — toy producing code the lineage page
-  points at, so the RCA agent has a real path to `git log`
+  structured `equation` frontmatter is what `cross_source_wiki` evaluates, and
+  the lineage page's `repo_url` + `recent_changes` are what the RCA agent links
+- `pipeline/models/senior_debt.sql` — stands in for the customer's data-pipeline
+  producing code (the SQL with the Q2 advance-rate override); the lineage page
+  points at it as `models/senior_debt.sql` in the pipeline repo

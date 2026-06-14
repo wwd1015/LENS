@@ -1,145 +1,145 @@
 deal_id,loan_id,snapshot_date,balance,status
-D1,L01,2025-01-31,1200000.0,performing
-D1,L02,2025-01-31,800000.0,performing
-D1,L03,2025-01-31,500000.0,performing
-D2,L04,2025-01-31,2000000.0,performing
-D2,L05,2025-01-31,1500000.0,performing
-D3,L06,2025-01-31,900000.0,performing
-D3,L07,2025-01-31,700000.0,performing
-D3,L08,2025-01-31,400000.0,performing
-D1,L01,2025-02-28,1188000.0,performing
-D1,L02,2025-02-28,792000.0,performing
-D1,L03,2025-02-28,495000.0,performing
-D2,L04,2025-02-28,1980000.0,performing
-D2,L05,2025-02-28,1485000.0,performing
-D3,L06,2025-02-28,891000.0,performing
-D3,L07,2025-02-28,693000.0,performing
-D3,L08,2025-02-28,396000.0,performing
-D1,L01,2025-03-31,1176000.0,performing
-D1,L02,2025-03-31,784000.0,performing
-D1,L03,2025-03-31,490000.0,performing
-D2,L04,2025-03-31,1960000.0,performing
-D2,L05,2025-03-31,1470000.0,performing
-D3,L06,2025-03-31,882000.0,performing
-D3,L07,2025-03-31,686000.0,performing
-D3,L08,2025-03-31,392000.0,performing
-D1,L01,2025-04-30,1164000.0,performing
-D1,L02,2025-04-30,776000.0,performing
-D1,L03,2025-04-30,485000.0,performing
-D2,L04,2025-04-30,1940000.0,performing
-D2,L05,2025-04-30,1455000.0,performing
-D3,L06,2025-04-30,873000.0,performing
-D3,L07,2025-04-30,679000.0,performing
-D3,L08,2025-04-30,388000.0,performing
-D1,L01,2025-05-31,1152000.0,performing
-D1,L02,2025-05-31,768000.0,performing
-D1,L03,2025-05-31,480000.0,performing
-D2,L04,2025-05-31,1920000.0,performing
-D2,L05,2025-05-31,1440000.0,performing
-D3,L06,2025-05-31,864000.0,performing
-D3,L07,2025-05-31,672000.0,performing
-D3,L08,2025-05-31,384000.0,performing
-D1,L01,2025-06-30,1140000.0,performing
-D1,L02,2025-06-30,760000.0,performing
-D1,L03,2025-06-30,475000.0,performing
-D2,L04,2025-06-30,1900000.0,performing
-D2,L05,2025-06-30,1425000.0,performing
-D3,L06,2025-06-30,855000.0,performing
-D3,L07,2025-06-30,665000.0,performing
-D3,L08,2025-06-30,380000.0,performing
-D1,L01,2025-07-31,1128000.0,performing
-D1,L02,2025-07-31,752000.0,performing
-D1,L03,2025-07-31,470000.0,performing
-D2,L04,2025-07-31,1880000.0,performing
-D2,L05,2025-07-31,1410000.0,performing
-D3,L06,2025-07-31,846000.0,performing
-D3,L07,2025-07-31,658000.0,performing
-D3,L08,2025-07-31,376000.0,performing
-D1,L01,2025-08-31,1116000.0,performing
-D1,L02,2025-08-31,744000.0,performing
-D1,L03,2025-08-31,465000.0,performing
-D2,L04,2025-08-31,1860000.0,performing
-D2,L05,2025-08-31,1395000.0,performing
-D3,L06,2025-08-31,837000.0,performing
-D3,L07,2025-08-31,651000.0,performing
-D3,L08,2025-08-31,372000.0,performing
-D1,L01,2025-09-30,1104000.0,performing
-D1,L02,2025-09-30,736000.0,performing
-D1,L03,2025-09-30,460000.0,performing
-D2,L04,2025-09-30,1840000.0,performing
-D2,L05,2025-09-30,1380000.0,performing
-D3,L06,2025-09-30,828000.0,performing
-D3,L07,2025-09-30,644000.0,performing
-D3,L08,2025-09-30,368000.0,performing
-D1,L01,2025-10-31,1092000.0,performing
-D1,L02,2025-10-31,728000.0,performing
-D1,L03,2025-10-31,455000.0,performing
-D2,L04,2025-10-31,1820000.0,performing
-D2,L05,2025-10-31,1365000.0,performing
-D3,L06,2025-10-31,819000.0,performing
-D3,L07,2025-10-31,637000.0,performing
-D3,L08,2025-10-31,364000.0,performing
-D1,L01,2025-11-30,1080000.0,performing
-D1,L02,2025-11-30,720000.0,performing
-D1,L03,2025-11-30,450000.0,performing
-D2,L04,2025-11-30,1800000.0,performing
-D2,L05,2025-11-30,1350000.0,performing
-D3,L06,2025-11-30,810000.0,performing
-D3,L07,2025-11-30,630000.0,performing
-D3,L08,2025-11-30,360000.0,performing
-D1,L01,2025-12-31,1068000.0,performing
-D1,L02,2025-12-31,712000.0,performing
-D1,L03,2025-12-31,445000.0,performing
-D2,L04,2025-12-31,1780000.0,performing
-D2,L05,2025-12-31,1335000.0,performing
-D3,L06,2025-12-31,801000.0,performing
-D3,L07,2025-12-31,623000.0,performing
-D3,L08,2025-12-31,356000.0,performing
-D1,L01,2026-01-31,1056000.0,performing
-D1,L02,2026-01-31,704000.0,performing
-D1,L03,2026-01-31,440000.0,performing
-D2,L04,2026-01-31,1760000.0,performing
-D2,L05,2026-01-31,1320000.0,performing
-D3,L06,2026-01-31,792000.0,performing
-D3,L07,2026-01-31,616000.0,performing
-D3,L08,2026-01-31,352000.0,performing
-D1,L01,2026-02-28,1044000.0,performing
-D1,L02,2026-02-28,696000.0,performing
-D1,L03,2026-02-28,435000.0,performing
-D2,L04,2026-02-28,1740000.0,performing
-D2,L05,2026-02-28,1305000.0,performing
-D3,L06,2026-02-28,783000.0,performing
-D3,L07,2026-02-28,609000.0,performing
-D3,L08,2026-02-28,348000.0,performing
-D1,L01,2026-03-31,1032000.0,performing
-D1,L02,2026-03-31,688000.0,performing
-D1,L03,2026-03-31,430000.0,performing
-D2,L04,2026-03-31,1720000.0,performing
-D2,L05,2026-03-31,1290000.0,performing
-D3,L06,2026-03-31,774000.0,performing
-D3,L07,2026-03-31,602000.0,performing
-D3,L08,2026-03-31,344000.0,performing
-D1,L01,2026-04-30,1020000.0,performing
-D1,L02,2026-04-30,680000.0,performing
-D1,L03,2026-04-30,425000.0,performing
-D2,L04,2026-04-30,1700000.0,performing
-D2,L05,2026-04-30,1275000.0,performing
-D3,L06,2026-04-30,765000.0,performing
-D3,L07,2026-04-30,595000.0,performing
-D3,L08,2026-04-30,340000.0,performing
-D1,L01,2026-05-31,1008000.0,performing
-D1,L02,2026-05-31,672000.0,performing
-D1,L03,2026-05-31,420000.0,performing
-D2,L04,2026-05-31,1680000.0,performing
-D2,L05,2026-05-31,1260000.0,performing
-D3,L06,2026-05-31,756000.0,performing
-D3,L07,2026-05-31,588000.0,performing
-D3,L08,2026-05-31,336000.0,performing
-D1,L01,2026-06-30,996000.0,performing
-D1,L02,2026-06-30,664000.0,performing
-D1,L03,2026-06-30,415000.0,performing
-D2,L04,2026-06-30,1660000.0,performing
-D2,L05,2026-06-30,1245000.0,performing
-D3,L06,2026-06-30,747000.0,
-D3,L07,2026-06-30,581000.0,
-D3,L08,2026-06-30,332000.0,performing
+Brightwater CLO 2024-1,Cedar Park Health,2025-01-31,1200000.0,performing
+Brightwater CLO 2024-1,Vega Robotics,2025-01-31,800000.0,performing
+Brightwater CLO 2024-1,Atlas Freight,2025-01-31,500000.0,performing
+Sterling Mid-Market Fund II,Northwind Hospitality,2025-01-31,2000000.0,performing
+Sterling Mid-Market Fund II,Lumen Diagnostics,2025-01-31,1500000.0,performing
+Granite Peak Direct Lending,Redwood Materials,2025-01-31,900000.0,performing
+Granite Peak Direct Lending,Ironclad Security,2025-01-31,700000.0,performing
+Granite Peak Direct Lending,Harbor Point Foods,2025-01-31,400000.0,performing
+Brightwater CLO 2024-1,Cedar Park Health,2025-02-28,1188000.0,performing
+Brightwater CLO 2024-1,Vega Robotics,2025-02-28,792000.0,performing
+Brightwater CLO 2024-1,Atlas Freight,2025-02-28,495000.0,performing
+Sterling Mid-Market Fund II,Northwind Hospitality,2025-02-28,1980000.0,performing
+Sterling Mid-Market Fund II,Lumen Diagnostics,2025-02-28,1485000.0,performing
+Granite Peak Direct Lending,Redwood Materials,2025-02-28,891000.0,performing
+Granite Peak Direct Lending,Ironclad Security,2025-02-28,693000.0,performing
+Granite Peak Direct Lending,Harbor Point Foods,2025-02-28,396000.0,performing
+Brightwater CLO 2024-1,Cedar Park Health,2025-03-31,1176000.0,performing
+Brightwater CLO 2024-1,Vega Robotics,2025-03-31,784000.0,performing
+Brightwater CLO 2024-1,Atlas Freight,2025-03-31,490000.0,performing
+Sterling Mid-Market Fund II,Northwind Hospitality,2025-03-31,1960000.0,performing
+Sterling Mid-Market Fund II,Lumen Diagnostics,2025-03-31,1470000.0,performing
+Granite Peak Direct Lending,Redwood Materials,2025-03-31,882000.0,performing
+Granite Peak Direct Lending,Ironclad Security,2025-03-31,686000.0,performing
+Granite Peak Direct Lending,Harbor Point Foods,2025-03-31,392000.0,performing
+Brightwater CLO 2024-1,Cedar Park Health,2025-04-30,1164000.0,performing
+Brightwater CLO 2024-1,Vega Robotics,2025-04-30,776000.0,performing
+Brightwater CLO 2024-1,Atlas Freight,2025-04-30,485000.0,performing
+Sterling Mid-Market Fund II,Northwind Hospitality,2025-04-30,1940000.0,performing
+Sterling Mid-Market Fund II,Lumen Diagnostics,2025-04-30,1455000.0,performing
+Granite Peak Direct Lending,Redwood Materials,2025-04-30,873000.0,performing
+Granite Peak Direct Lending,Ironclad Security,2025-04-30,679000.0,performing
+Granite Peak Direct Lending,Harbor Point Foods,2025-04-30,388000.0,performing
+Brightwater CLO 2024-1,Cedar Park Health,2025-05-31,1152000.0,performing
+Brightwater CLO 2024-1,Vega Robotics,2025-05-31,768000.0,performing
+Brightwater CLO 2024-1,Atlas Freight,2025-05-31,480000.0,performing
+Sterling Mid-Market Fund II,Northwind Hospitality,2025-05-31,1920000.0,performing
+Sterling Mid-Market Fund II,Lumen Diagnostics,2025-05-31,1440000.0,performing
+Granite Peak Direct Lending,Redwood Materials,2025-05-31,864000.0,performing
+Granite Peak Direct Lending,Ironclad Security,2025-05-31,672000.0,performing
+Granite Peak Direct Lending,Harbor Point Foods,2025-05-31,384000.0,performing
+Brightwater CLO 2024-1,Cedar Park Health,2025-06-30,1140000.0,performing
+Brightwater CLO 2024-1,Vega Robotics,2025-06-30,760000.0,performing
+Brightwater CLO 2024-1,Atlas Freight,2025-06-30,475000.0,performing
+Sterling Mid-Market Fund II,Northwind Hospitality,2025-06-30,1900000.0,performing
+Sterling Mid-Market Fund II,Lumen Diagnostics,2025-06-30,1425000.0,performing
+Granite Peak Direct Lending,Redwood Materials,2025-06-30,855000.0,performing
+Granite Peak Direct Lending,Ironclad Security,2025-06-30,665000.0,performing
+Granite Peak Direct Lending,Harbor Point Foods,2025-06-30,380000.0,performing
+Brightwater CLO 2024-1,Cedar Park Health,2025-07-31,1128000.0,performing
+Brightwater CLO 2024-1,Vega Robotics,2025-07-31,752000.0,performing
+Brightwater CLO 2024-1,Atlas Freight,2025-07-31,470000.0,performing
+Sterling Mid-Market Fund II,Northwind Hospitality,2025-07-31,1880000.0,performing
+Sterling Mid-Market Fund II,Lumen Diagnostics,2025-07-31,1410000.0,performing
+Granite Peak Direct Lending,Redwood Materials,2025-07-31,846000.0,performing
+Granite Peak Direct Lending,Ironclad Security,2025-07-31,658000.0,performing
+Granite Peak Direct Lending,Harbor Point Foods,2025-07-31,376000.0,performing
+Brightwater CLO 2024-1,Cedar Park Health,2025-08-31,1116000.0,performing
+Brightwater CLO 2024-1,Vega Robotics,2025-08-31,744000.0,performing
+Brightwater CLO 2024-1,Atlas Freight,2025-08-31,465000.0,performing
+Sterling Mid-Market Fund II,Northwind Hospitality,2025-08-31,1860000.0,performing
+Sterling Mid-Market Fund II,Lumen Diagnostics,2025-08-31,1395000.0,performing
+Granite Peak Direct Lending,Redwood Materials,2025-08-31,837000.0,performing
+Granite Peak Direct Lending,Ironclad Security,2025-08-31,651000.0,performing
+Granite Peak Direct Lending,Harbor Point Foods,2025-08-31,372000.0,performing
+Brightwater CLO 2024-1,Cedar Park Health,2025-09-30,1104000.0,performing
+Brightwater CLO 2024-1,Vega Robotics,2025-09-30,736000.0,performing
+Brightwater CLO 2024-1,Atlas Freight,2025-09-30,460000.0,performing
+Sterling Mid-Market Fund II,Northwind Hospitality,2025-09-30,1840000.0,performing
+Sterling Mid-Market Fund II,Lumen Diagnostics,2025-09-30,1380000.0,performing
+Granite Peak Direct Lending,Redwood Materials,2025-09-30,828000.0,performing
+Granite Peak Direct Lending,Ironclad Security,2025-09-30,644000.0,performing
+Granite Peak Direct Lending,Harbor Point Foods,2025-09-30,368000.0,performing
+Brightwater CLO 2024-1,Cedar Park Health,2025-10-31,1092000.0,performing
+Brightwater CLO 2024-1,Vega Robotics,2025-10-31,728000.0,performing
+Brightwater CLO 2024-1,Atlas Freight,2025-10-31,455000.0,performing
+Sterling Mid-Market Fund II,Northwind Hospitality,2025-10-31,1820000.0,performing
+Sterling Mid-Market Fund II,Lumen Diagnostics,2025-10-31,1365000.0,performing
+Granite Peak Direct Lending,Redwood Materials,2025-10-31,819000.0,performing
+Granite Peak Direct Lending,Ironclad Security,2025-10-31,637000.0,performing
+Granite Peak Direct Lending,Harbor Point Foods,2025-10-31,364000.0,performing
+Brightwater CLO 2024-1,Cedar Park Health,2025-11-30,1080000.0,performing
+Brightwater CLO 2024-1,Vega Robotics,2025-11-30,720000.0,performing
+Brightwater CLO 2024-1,Atlas Freight,2025-11-30,450000.0,performing
+Sterling Mid-Market Fund II,Northwind Hospitality,2025-11-30,1800000.0,performing
+Sterling Mid-Market Fund II,Lumen Diagnostics,2025-11-30,1350000.0,performing
+Granite Peak Direct Lending,Redwood Materials,2025-11-30,810000.0,performing
+Granite Peak Direct Lending,Ironclad Security,2025-11-30,630000.0,performing
+Granite Peak Direct Lending,Harbor Point Foods,2025-11-30,360000.0,performing
+Brightwater CLO 2024-1,Cedar Park Health,2025-12-31,1068000.0,performing
+Brightwater CLO 2024-1,Vega Robotics,2025-12-31,712000.0,performing
+Brightwater CLO 2024-1,Atlas Freight,2025-12-31,445000.0,performing
+Sterling Mid-Market Fund II,Northwind Hospitality,2025-12-31,1780000.0,performing
+Sterling Mid-Market Fund II,Lumen Diagnostics,2025-12-31,1335000.0,performing
+Granite Peak Direct Lending,Redwood Materials,2025-12-31,801000.0,performing
+Granite Peak Direct Lending,Ironclad Security,2025-12-31,623000.0,performing
+Granite Peak Direct Lending,Harbor Point Foods,2025-12-31,356000.0,performing
+Brightwater CLO 2024-1,Cedar Park Health,2026-01-31,1056000.0,performing
+Brightwater CLO 2024-1,Vega Robotics,2026-01-31,704000.0,performing
+Brightwater CLO 2024-1,Atlas Freight,2026-01-31,440000.0,performing
+Sterling Mid-Market Fund II,Northwind Hospitality,2026-01-31,1760000.0,performing
+Sterling Mid-Market Fund II,Lumen Diagnostics,2026-01-31,1320000.0,performing
+Granite Peak Direct Lending,Redwood Materials,2026-01-31,792000.0,performing
+Granite Peak Direct Lending,Ironclad Security,2026-01-31,616000.0,performing
+Granite Peak Direct Lending,Harbor Point Foods,2026-01-31,352000.0,performing
+Brightwater CLO 2024-1,Cedar Park Health,2026-02-28,1044000.0,performing
+Brightwater CLO 2024-1,Vega Robotics,2026-02-28,696000.0,performing
+Brightwater CLO 2024-1,Atlas Freight,2026-02-28,435000.0,performing
+Sterling Mid-Market Fund II,Northwind Hospitality,2026-02-28,1740000.0,performing
+Sterling Mid-Market Fund II,Lumen Diagnostics,2026-02-28,1305000.0,performing
+Granite Peak Direct Lending,Redwood Materials,2026-02-28,783000.0,performing
+Granite Peak Direct Lending,Ironclad Security,2026-02-28,609000.0,performing
+Granite Peak Direct Lending,Harbor Point Foods,2026-02-28,348000.0,performing
+Brightwater CLO 2024-1,Cedar Park Health,2026-03-31,1032000.0,performing
+Brightwater CLO 2024-1,Vega Robotics,2026-03-31,688000.0,performing
+Brightwater CLO 2024-1,Atlas Freight,2026-03-31,430000.0,performing
+Sterling Mid-Market Fund II,Northwind Hospitality,2026-03-31,1720000.0,performing
+Sterling Mid-Market Fund II,Lumen Diagnostics,2026-03-31,1290000.0,performing
+Granite Peak Direct Lending,Redwood Materials,2026-03-31,774000.0,performing
+Granite Peak Direct Lending,Ironclad Security,2026-03-31,602000.0,performing
+Granite Peak Direct Lending,Harbor Point Foods,2026-03-31,344000.0,performing
+Brightwater CLO 2024-1,Cedar Park Health,2026-04-30,1020000.0,performing
+Brightwater CLO 2024-1,Vega Robotics,2026-04-30,680000.0,performing
+Brightwater CLO 2024-1,Atlas Freight,2026-04-30,425000.0,performing
+Sterling Mid-Market Fund II,Northwind Hospitality,2026-04-30,1700000.0,performing
+Sterling Mid-Market Fund II,Lumen Diagnostics,2026-04-30,1275000.0,performing
+Granite Peak Direct Lending,Redwood Materials,2026-04-30,765000.0,performing
+Granite Peak Direct Lending,Ironclad Security,2026-04-30,595000.0,performing
+Granite Peak Direct Lending,Harbor Point Foods,2026-04-30,340000.0,performing
+Brightwater CLO 2024-1,Cedar Park Health,2026-05-31,1008000.0,performing
+Brightwater CLO 2024-1,Vega Robotics,2026-05-31,672000.0,performing
+Brightwater CLO 2024-1,Atlas Freight,2026-05-31,420000.0,performing
+Sterling Mid-Market Fund II,Northwind Hospitality,2026-05-31,1680000.0,performing
+Sterling Mid-Market Fund II,Lumen Diagnostics,2026-05-31,1260000.0,performing
+Granite Peak Direct Lending,Redwood Materials,2026-05-31,756000.0,performing
+Granite Peak Direct Lending,Ironclad Security,2026-05-31,588000.0,performing
+Granite Peak Direct Lending,Harbor Point Foods,2026-05-31,336000.0,performing
+Brightwater CLO 2024-1,Cedar Park Health,2026-06-30,996000.0,performing
+Brightwater CLO 2024-1,Vega Robotics,2026-06-30,664000.0,performing
+Brightwater CLO 2024-1,Atlas Freight,2026-06-30,415000.0,performing
+Sterling Mid-Market Fund II,Northwind Hospitality,2026-06-30,1660000.0,performing
+Sterling Mid-Market Fund II,Lumen Diagnostics,2026-06-30,1245000.0,performing
+Granite Peak Direct Lending,Redwood Materials,2026-06-30,747000.0,
+Granite Peak Direct Lending,Ironclad Security,2026-06-30,581000.0,
+Granite Peak Direct Lending,Harbor Point Foods,2026-06-30,332000.0,performing

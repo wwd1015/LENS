@@ -1,14 +1,15 @@
 """Regenerate the synthetic lending CSVs for the demo. Deterministic — no RNG.
 
-Three deals, 18 monthly snapshots. The data is internally consistent
-(senior_debt.balance == sum(loan_pool.balance per deal) * advance_rate)
-except for two planted anomalies on the final snapshot:
+Three real-sounding deals, 18 monthly snapshots. The data is internally
+consistent (senior_debt.balance == sum(loan_pool.balance per deal) *
+advance_rate) except for two planted anomalies on the final snapshot:
 
-* deal D2's senior-debt balance is inflated 12% — breaches the
-  ``senior-debt-equals-pool-x-advance-rate`` wiki rule AND spikes the
-  ``stl_residual`` series, so the two detector families agree and the
+* the "Sterling Mid-Market Fund II" senior-debt balance is inflated 12% —
+  breaches the ``senior-debt-equals-pool-x-advance-rate`` wiki rule AND spikes
+  the ``stl_residual`` series, so the two detector families agree and the
   orchestrator's agreement boost kicks in.
-* two of deal D3's loans have a null ``status`` — fires ``null_check``.
+* two of "Granite Peak Direct Lending"'s borrowers have a null ``status`` —
+  fires ``null_check``.
 
 Run from the repo root::
 
@@ -24,11 +25,25 @@ from pathlib import Path
 
 OUT_DIR = Path(__file__).parent / "data"
 
+# Deal name → (advance_rate, {borrower: starting_balance}). Borrower names
+# stand in for loan_id; deal names stand in for deal_id. No commas (CSV-safe).
 DEALS = {
-    # deal_id: (advance_rate, {loan_id: starting_balance})
-    "D1": (0.80, {"L01": 1_200_000.0, "L02": 800_000.0, "L03": 500_000.0}),
-    "D2": (0.75, {"L04": 2_000_000.0, "L05": 1_500_000.0}),
-    "D3": (0.70, {"L06": 900_000.0, "L07": 700_000.0, "L08": 400_000.0}),
+    "Brightwater CLO 2024-1": (
+        0.80,
+        {"Cedar Park Health": 1_200_000.0, "Vega Robotics": 800_000.0, "Atlas Freight": 500_000.0},
+    ),
+    "Sterling Mid-Market Fund II": (
+        0.75,
+        {"Northwind Hospitality": 2_000_000.0, "Lumen Diagnostics": 1_500_000.0},
+    ),
+    "Granite Peak Direct Lending": (
+        0.70,
+        {
+            "Redwood Materials": 900_000.0,
+            "Ironclad Security": 700_000.0,
+            "Harbor Point Foods": 400_000.0,
+        },
+    ),
 }
 
 # 1% of original balance amortizes each month.
@@ -37,8 +52,11 @@ AMORT_RATE = 0.01
 N_SNAPSHOTS = 18
 FIRST_YEAR, FIRST_MONTH = 2025, 1  # first snapshot: 2025-01-31
 
-SENIOR_DEBT_INFLATION = 1.12  # planted breach on D2's final snapshot
-NULL_STATUS_LOANS = {"L06", "L07"}  # planted nulls on D3's final snapshot
+# Planted breach: this deal's senior-debt is inflated 12% on the last snapshot.
+INFLATED_DEAL = "Sterling Mid-Market Fund II"
+SENIOR_DEBT_INFLATION = 1.12
+# Planted nulls: these borrowers lose their status on the last snapshot.
+NULL_STATUS_LOANS = {"Redwood Materials", "Ironclad Security"}
 
 
 def _snapshot_dates() -> list[date]:
@@ -81,7 +99,7 @@ def main() -> None:
                 )
 
             senior_balance = round(pool_total * advance_rate, 2)
-            if snap == last and deal_id == "D2":
+            if snap == last and deal_id == INFLATED_DEAL:
                 senior_balance = round(senior_balance * SENIOR_DEBT_INFLATION, 2)
             senior_debt_rows.append(
                 {

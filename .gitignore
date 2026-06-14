@@ -12,3 +12,4 @@ dist/
 
 # Demo / batch run outputs
 examples/lending_demo/out/
+.gstack/

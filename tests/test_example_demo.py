@@ -58,29 +58,32 @@ def test_demo_end_to_end(demo_cfg):
         for fam in f.detector_families:
             by_detector.setdefault(fam, []).append(f)
 
-    # Planted anomaly 1: D3 null statuses → null_check ERROR.
+    # Planted anomaly 1: Granite Peak null statuses → null_check ERROR.
     null_hits = by_detector.get("null_check", [])
-    assert null_hits, "null_check should fire on D3's null statuses"
-    assert {f.issue.entity_id for f in null_hits} == {"D3"}
+    assert null_hits, "null_check should fire on Granite Peak's null statuses"
+    assert {f.issue.entity_id for f in null_hits} == {"Granite Peak Direct Lending"}
     assert all(f.issue.severity is Severity.ERROR for f in null_hits)
 
-    # Planted anomaly 2: D2 senior-debt inflation → cross-source rule breach.
+    # Planted anomaly 2: Sterling MMF II senior-debt inflation → rule breach.
     cross_hits = by_detector.get("cross_source_wiki", [])
-    assert cross_hits, "the wiki rule should fire on D2's inflated senior debt"
-    assert {f.issue.entity_id for f in cross_hits} == {"D2"}
+    assert cross_hits, "the wiki rule should fire on Sterling MMF II's inflated debt"
+    assert {f.issue.entity_id for f in cross_hits} == {"Sterling Mid-Market Fund II"}
+    # The breach carries a reproducible breakdown (formula + operand values).
+    breach = cross_hits[0].issue.details
+    assert breach["formula"].startswith("senior_debt.balance =")
+    assert {t["label"]: t["value"] for t in breach["terms"]} == {
+        "sum(loan_pool.balance per deal_id)": 2_905_000.0,
+        "deal_terms.advance_rate": 0.75,
+    }
 
     # The same inflated point also spikes the STL residual → two independent
     # families on one finding → agreement boost.
-    boosted = [
-        f
-        for f in result.findings
-        if (f.issue.details or {}).get("agreement_boost")
-    ]
-    assert boosted, "cross_source_wiki + stl_residual should agree on D2"
-    assert any(f.issue.entity_id == "D2" for f in boosted)
+    boosted = [f for f in result.findings if (f.issue.details or {}).get("agreement_boost")]
+    assert boosted, "cross_source_wiki + stl_residual should agree on the breach"
+    assert any(f.issue.entity_id == "Sterling Mid-Market Fund II" for f in boosted)
 
     # Group RCA ran (floor=error) and attached hypotheses.
-    assert result.rca_groups_investigated >= 2  # null_check group + D2 group(s)
+    assert result.rca_groups_investigated >= 2  # null group + breach group(s)
     assert result.rcas
     for prompt in stub.prompts:
         assert "# Finding" in prompt
@@ -90,7 +93,7 @@ def test_demo_end_to_end(demo_cfg):
     data = json.loads(result.findings_path.read_text())
     assert len(data) == len(result.findings)
     html = result.brief_html_path.read_text(encoding="utf-8")
-    assert "Lending demo portfolio" in html
+    assert "Northwind Capital" in html
     assert "feedback-bar" in html  # one-click buttons render
     assert (demo_cfg.output_dir / "brief.latest.html").is_symlink()
     assert "LENS Brief" in result.markdown_digest
@@ -102,9 +105,7 @@ def test_demo_feedback_suppression_round_trip(demo_cfg):
 
     stub = StubLLM()
     first = run_batch(demo_cfg, run_id="fb1", llm_client=stub)
-    null_findings = [
-        f for f in first.findings if "null_check" in f.detector_families
-    ]
+    null_findings = [f for f in first.findings if "null_check" in f.detector_families]
     assert null_findings
     for f in null_findings:
         append_feedback(
@@ -118,12 +119,10 @@ def test_demo_feedback_suppression_round_trip(demo_cfg):
 
     second = run_batch(demo_cfg, run_id="fb2", llm_client=StubLLM())
     suppressed = [
-        f
-        for f in second.findings
-        if (f.issue.details or {}).get("suppressed_by_feedback")
+        f for f in second.findings if (f.issue.details or {}).get("suppressed_by_feedback")
     ]
     assert suppressed
     assert all(f.issue.severity is Severity.INFO for f in suppressed)
-    assert {f.issue.entity_id for f in suppressed} == {"D3"}
+    assert {f.issue.entity_id for f in suppressed} == {"Granite Peak Direct Lending"}
     html = second.brief_html_path.read_text(encoding="utf-8")
-    assert "suppressed by analyst feedback" in html
+    assert "set aside earlier as false alarms" in html

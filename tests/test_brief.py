@@ -110,7 +110,7 @@ def test_renders_empty_state_when_no_findings(tmp_path: Path) -> None:
     out = tmp_path / "brief.html"
     render_brief([], {}, out)
     html = out.read_text(encoding="utf-8")
-    assert "All quiet" in html
+    assert "All clear" in html
 
 
 # ---------------------------------------------------------------------------
@@ -166,9 +166,9 @@ def test_what_changed_header_renders_with_prior(tmp_path: Path) -> None:
     render_brief([f2, f3], {}, out, prior_findings_path=prior_path)
     html = out.read_text(encoding="utf-8")
 
-    assert "+1 new" in html
-    assert "-1 resolved" in html
-    assert "=1 ongoing" in html
+    assert "1 new since last check" in html
+    assert "1 cleared up" in html
+    assert "1 still open" in html
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +181,7 @@ def test_cap_applied_warning_when_findings_exceed_max(tmp_path: Path) -> None:
     out = tmp_path / "brief.html"
     render_brief(findings, {}, out, max_findings=500)
     html = out.read_text(encoding="utf-8")
-    assert "showing top 500 of 501" in html
+    assert "most important of 501" in html
 
 
 # ---------------------------------------------------------------------------
@@ -225,14 +225,14 @@ def test_severity_ordering_in_render(tmp_path: Path) -> None:
     render_brief([f_info, f_warning, f_critical, f_error], {}, out)
     html = out.read_text(encoding="utf-8")
 
-    # The first severity badge in the rendered card stream must be CRITICAL.
-    badges = re.findall(r'badge badge-(critical|error|warning|info)">', html)
-    assert badges, "expected at least one severity badge in output"
-    assert badges[0] == "critical", f"first badge was {badges[0]!r}, expected critical"
+    # The first severity pill in the rendered card stream must be CRITICAL.
+    badges = re.findall(r'sev-pill sev-(critical|error|warning|info)"', html)
+    assert badges, "expected at least one severity pill in output"
+    assert badges[0] == "critical", f"first pill was {badges[0]!r}, expected critical"
 
     # And critical should precede error in the rendered HTML.
-    idx_critical = html.find('badge badge-critical">')
-    idx_error = html.find('badge badge-error">')
+    idx_critical = html.find('sev-pill sev-critical"')
+    idx_error = html.find('sev-pill sev-error"')
     assert idx_critical != -1 and idx_error != -1
     assert idx_critical < idx_error
 

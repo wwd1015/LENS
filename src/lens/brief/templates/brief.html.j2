@@ -7,78 +7,132 @@
   `styles_inline` is intentional — that string comes from a
   developer-controlled file (styles.css), never from user/LLM input.
 -#}
+{%- macro segments(segs) -%}
+{%- for s in segs -%}
+{%- if s.url -%}<a href="{{ s.url }}" target="_blank" rel="noopener noreferrer">{{ s.url }}</a>{%- else -%}{{ s.text }}{%- endif -%}
+{%- endfor -%}
+{%- endmacro -%}
 {%- macro finding_card(f) -%}
             <article class="card severity-{{ f.severity }}" data-severity="{{ f.severity }}">
-              <div class="card-head">
-                <span class="badge badge-{{ f.severity }}">{{ f.severity_upper }}</span>
+              <div class="card-pills">
+                <span class="sev-pill sev-{{ f.severity }}">{{ f.severity_meaning }}</span>
+                {% if f.check_count >= 2 %}
+                  <span class="agree-pill" title="{{ f.check_count }} independent checks flagged the same point">
+                    &#10003; {{ f.check_count }} checks agree
+                  </span>
+                {% endif %}
                 {% if f.suppression %}
-                  <span class="badge badge-suppressed" title="downgraded by analyst feedback{% if f.suppression.expires %} — expires {{ f.suppression.expires }}{% endif %}">
-                    suppressed (was {{ f.suppression.original_severity | upper }})
+                  <span class="note-pill note-suppressed"
+                        title="An analyst set this aside as a false alarm{% if f.suppression.expires %}; it will return on its own after {{ f.suppression.expires[:10] }}{% endif %}.">
+                    Set aside by an analyst
                   </span>
+                {% elif f.prior_feedback_human %}
+                  <span class="note-pill note-prior">Earlier: {{ f.prior_feedback_human }}</span>
                 {% endif %}
-                {% if f.prior_feedback and not f.suppression %}
-                  <span class="badge badge-prior-feedback" title="{{ f.prior_feedback.ts }}">
-                    prior verdict: {{ f.prior_feedback.label }}
-                  </span>
-                {% endif %}
-                <div class="confidence" title="confidence {{ (f.confidence * 100) | round(1) }}%">
-                  <div class="bar" style="width: {{ (f.confidence * 100) | round(1) }}%"></div>
+              </div>
+
+              <h3 class="finding-title">{{ f.title }}</h3>
+              <p class="finding-sub">{{ f.subtitle }}.</p>
+
+              <dl class="facts">
+                <div class="fact">
+                  <dt>Where</dt>
+                  <dd>{{ f.entity_id }}{% if f.field_human %} &mdash; {{ f.field_human }}{% endif %}</dd>
                 </div>
-                {% if f.detector_sources %}
-                  <span class="mono" style="color: var(--fg-muted); font-size: 0.8rem;">
-                    {{ f.detector_sources | join(", ") }}
-                  </span>
+                {% if f.date_human %}
+                <div class="fact"><dt>When</dt><dd>{{ f.date_human }}</dd></div>
                 {% endif %}
-              </div>
-
-              <div class="card-summary">
-                {% if f.entity_id %}<span class="entity">{{ f.entity_id }}</span>{% endif %}
-                {% if f.field_name %} &middot; <span class="field">{{ f.field_name }}</span>{% endif %}
-                {% if f.snapshot_date %} &middot; <span class="snapshot">{{ f.snapshot_date }}</span>{% endif %}
-              </div>
-
-              {% if f.description %}
-                <div class="card-description">{{ f.description }}</div>
-              {% endif %}
+                <div class="fact"><dt>Confidence</dt><dd>{{ f.confidence_pct }}%</dd></div>
+              </dl>
 
               {% if f.rca %}
-                <details>
-                  <summary>RCA hypothesis (confidence {{ (f.rca.confidence * 100) | round(1) }}%)</summary>
-                  <div class="rca-block">
-                    <p class="rca-hypothesis">{{ f.rca.hypothesis }}</p>
-                    {% if f.rca.evidence %}
-                      <strong>Evidence:</strong>
-                      <ul class="rca-evidence">
-                        {% for e in f.rca.evidence %}<li>{{ e }}</li>{% endfor %}
-                      </ul>
-                    {% endif %}
-                    {% if f.rca.references %}
-                      <strong>References:</strong>
-                      <ul class="rca-references">
-                        {% for r in f.rca.references %}
-                          <li>
-                            {% if r.startswith("http://") or r.startswith("https://") %}
-                              <a href="{{ r }}" target="_blank" rel="noopener noreferrer">{{ r }}</a>
-                            {% else %}
-                              <span class="mono">{{ r }}</span>
-                            {% endif %}
-                          </li>
-                        {% endfor %}
-                      </ul>
-                    {% endif %}
+                <div class="cause">
+                  <div class="cause-label">What likely happened</div>
+                  <p class="cause-text">{{ segments(f.rca.cause_segments) }}</p>
+                  {% if f.rca.links %}
+                    <div class="cause-links">
+                      <span class="cause-links-label">Likely origin in the data pipeline:</span>
+                      {% for l in f.rca.links %}
+                        <a class="cause-link" href="{{ l.url }}" target="_blank" rel="noopener noreferrer">{{ l.label }} &rarr;</a>
+                      {% endfor %}
+                    </div>
+                  {% endif %}
+                </div>
+              {% endif %}
+
+              {% if f.tech %}
+                <details class="numbers">
+                  <summary>The numbers behind this &mdash; how to check it yourself</summary>
+                  <div class="numbers-body">
+                    <div class="num-rule">Rule: <strong>{{ f.tech.rule }}</strong></div>
+                    <table class="calc">
+                      <tr>
+                        <td class="calc-key">Expected</td>
+                        <td class="calc-val">
+                          <span class="mono">{{ f.tech.rhs_label }}</span><br>
+                          {% if f.tech.terms %}
+                            = {% for t in f.tech.terms %}{{ t.value }}{% if not loop.last %} {{ f.tech.op_symbol }} {% endif %}{% endfor %}
+                            = <strong>{{ f.tech.rhs_value }}</strong>
+                          {% else %}
+                            = <strong>{{ f.tech.rhs_value }}</strong>
+                          {% endif %}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td class="calc-key">Actual</td>
+                        <td class="calc-val">
+                          <span class="mono">{{ f.tech.lhs_label }}</span> = <strong>{{ f.tech.lhs_value }}</strong>
+                        </td>
+                      </tr>
+                      <tr class="calc-diff">
+                        <td class="calc-key">Difference</td>
+                        <td class="calc-val">
+                          <strong>{{ f.tech.abs_diff }}</strong>{% if f.tech.pct %} ({{ f.tech.pct }} off){% endif %}{% if f.tech.tolerance %} &middot; allowed: {{ f.tech.tolerance }}{% endif %}
+                        </td>
+                      </tr>
+                    </table>
+                    {% for t in f.tech.terms %}
+                      <div class="num-term"><span class="mono">{{ t.label }}</span> = {{ t.value }}</div>
+                    {% endfor %}
                   </div>
+                </details>
+              {% elif f.description %}
+                <details class="numbers">
+                  <summary>Technical details</summary>
+                  <div class="numbers-body mono">{{ f.description }}</div>
                 </details>
               {% endif %}
 
-              <div class="feedback-bar"
-                   data-finding-id="{{ f.finding_id }}"
-                   data-entity-id="{{ f.entity_id }}"
-                   data-field-name="{{ f.field_name }}"
-                   data-detectors="{{ f.detector_sources | join(',') }}">
-                <button type="button" data-label="real">real</button>
-                <button type="button" data-label="false_positive">false positive</button>
-                <button type="button" data-label="needs_more">needs more</button>
-                <span class="feedback-status" aria-live="polite"></span>
+              {% if f.rca and f.rca.evidence %}
+                <details class="reasoning">
+                  <summary>Why we think this happened (full reasoning)</summary>
+                  <ul class="reasoning-list">
+                    {% for ev in f.rca.evidence %}<li>{{ segments(ev) }}</li>{% endfor %}
+                  </ul>
+                  {% if f.rca.context_refs %}
+                    <div class="context-refs">
+                      <span class="context-label">Based on:</span>
+                      {% for c in f.rca.context_refs %}<span class="chip">{{ c }}</span>{% endfor %}
+                    </div>
+                  {% endif %}
+                </details>
+              {% endif %}
+
+              <div class="feedback">
+                <span class="feedback-q">Is this a real problem?</span>
+                <div class="feedback-bar"
+                     data-finding-id="{{ f.finding_id }}"
+                     data-entity-id="{{ f.entity_id }}"
+                     data-field-name="{{ f.field_name }}"
+                     data-detectors="{{ f.detectors_csv }}">
+                  <button type="button" class="fb-yes" data-label="real">Yes, real issue</button>
+                  <button type="button" class="fb-no" data-label="false_positive">No, false alarm</button>
+                  <button type="button" class="fb-maybe" data-label="needs_more">Not sure</button>
+                  <span class="feedback-status" aria-live="polite"></span>
+                </div>
+                <div class="feedback-help">
+                  Your answer trains LENS to keep surfacing real problems and quietly set aside repeat false alarms.
+                </div>
               </div>
             </article>
 {%- endmacro -%}
@@ -86,114 +140,296 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>LENS Brief — {{ date_iso }}</title>
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'">
   <style>{{ styles_inline | safe }}</style>
 </head>
 <body>
-  <header>
-    <h1>LENS Morning Brief</h1>
-    <div class="subtitle">
-      {% if dataset_label %}<span class="mono">{{ dataset_label }}</span> &middot; {% endif -%}
-      {{ date_iso }} &middot; {{ total_findings }} finding{% if total_findings != 1 %}s{% endif %}
-      {%- if suppressed %} &middot; {{ suppressed | length }} suppressed by feedback{% endif %}
-    </div>
-
-    <div class="summary-row">
-      {% if summary_counts.get("critical", 0) > 0 %}
-        <span class="badge badge-critical">{{ summary_counts["critical"] }} critical</span>
-      {% endif %}
-      {% if summary_counts.get("error", 0) > 0 %}
-        <span class="badge badge-error">{{ summary_counts["error"] }} error</span>
-      {% endif %}
-      {% if summary_counts.get("warning", 0) > 0 %}
-        <span class="badge badge-warning">{{ summary_counts["warning"] }} warning</span>
-      {% endif %}
-      {% if summary_counts.get("info", 0) > 0 %}
-        <span class="badge badge-info">{{ summary_counts["info"] }} info</span>
-      {% endif %}
-
-      {% if delta_counts %}
-        <span class="delta-badge delta-new">+{{ delta_counts.new }} new</span>
-        <span class="delta-badge delta-resolved">-{{ delta_counts.resolved }} resolved</span>
-        <span class="delta-badge delta-ongoing">={{ delta_counts.ongoing }} ongoing</span>
-      {% endif %}
-    </div>
-
-    {% if cap_applied %}
-      <div class="cap-notice">
-        showing top {{ max_findings }} of {{ total_findings }} — see findings.json for the full list
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark">LENS</span>
+        <span class="brand-sub">Data Quality</span>
       </div>
-    {% endif %}
-
-    {% if total_findings > 0 %}
-    <div class="filter-bar" id="severity-filter">
-      <button data-filter="all" class="active">Show all</button>
-      <button data-filter="critical">Only critical</button>
-      <button data-filter="error">Only error</button>
-      <button data-filter="warning">Only warning</button>
-      <button data-filter="info">Only info</button>
-    </div>
-    {% endif %}
-  </header>
-
-  <main>
-    {% if total_findings == 0 %}
-      <div class="empty-state">
-        <div class="big">All quiet — no findings on this run.</div>
-        <div>Last run: {{ date_iso }}</div>
-      </div>
-    {% else %}
-      {% for group in groups %}
-        <section class="group">
-          <div class="group-heading">
-            <span>{{ group.label }}</span>
-            <span class="group-count">{{ group.total_in_group }} finding{% if group.total_in_group != 1 %}s{% endif %}</span>
-          </div>
-
-          {% for f in group.findings_in_group %}
-            {{ finding_card(f) }}
+      <nav class="toc" id="toc">
+        <a href="#top" class="toc-item toc-overview">Overview</a>
+        {% if total_findings > 0 %}
+          <div class="toc-label">Findings</div>
+          {% for group in groups %}
+            <a href="#group-{{ loop.index }}" class="toc-item" data-target="group-{{ loop.index }}">
+              <span class="toc-text">{{ group.label }}</span>
+              <span class="toc-count sev-dot-{{ group.top_severity }}">{{ group.total_in_group }}</span>
+            </a>
           {% endfor %}
-        </section>
-      {% endfor %}
-    {% endif %}
+        {% endif %}
+        {% if suppressed %}
+          <div class="toc-label">Other</div>
+          <a href="#suppressed" class="toc-item">
+            <span class="toc-text">Set aside</span>
+            <span class="toc-count toc-count-muted">{{ suppressed | length }}</span>
+          </a>
+        {% endif %}
+      </nav>
+    </aside>
 
-    {% if suppressed %}
-      <details class="suppressed-section">
-        <summary>
-          {{ suppressed | length }} finding{% if suppressed | length != 1 %}s{% endif %}
-          suppressed by analyst feedback (downgraded to INFO, never dropped)
-        </summary>
-        {% for f in suppressed %}
-          {{ finding_card(f) }}
-        {% endfor %}
-      </details>
-    {% endif %}
-  </main>
+    <div class="content">
+      <header class="topbar" id="top">
+        <div class="topbar-head">
+          <div>
+            <h1>Data Quality Brief</h1>
+            <div class="subtitle">
+              {% if dataset_label %}<strong>{{ dataset_label }}</strong> &middot; {% endif -%}
+              {{ date_iso }}
+            </div>
+          </div>
+          {% if total_findings > 0 %}
+          <div class="search-wrap">
+            <input type="search" id="search" placeholder="Search findings…" autocomplete="off" aria-label="Search findings">
+          </div>
+          {% endif %}
+        </div>
+      </header>
+
+      <div class="content-inner">
+        <p class="lede">
+          We checked your data for problems and found
+          <strong>{{ total_findings }} thing{% if total_findings != 1 %}s{% endif %}</strong>
+          worth your attention{% if suppressed %}, plus {{ suppressed | length }} set aside earlier{% endif %}.
+          Each card explains what's wrong, what likely caused it, and lets you tell us whether it's real.
+        </p>
+
+        {% if total_findings > 0 %}
+        <section class="stats">
+          <button class="stat stat-critical" data-filter="critical">
+            <span class="stat-num">{{ summary_counts.get("critical", 0) }}</span>
+            <span class="stat-label">Urgent</span>
+          </button>
+          <button class="stat stat-error" data-filter="error">
+            <span class="stat-num">{{ summary_counts.get("error", 0) }}</span>
+            <span class="stat-label">Likely issues</span>
+          </button>
+          <button class="stat stat-warning" data-filter="warning">
+            <span class="stat-num">{{ summary_counts.get("warning", 0) }}</span>
+            <span class="stat-label">Worth a look</span>
+          </button>
+          <button class="stat stat-info" data-filter="info">
+            <span class="stat-num">{{ summary_counts.get("info", 0) }}</span>
+            <span class="stat-label">Informational</span>
+          </button>
+        </section>
+
+        {% if delta_counts %}
+        <div class="delta-row">
+          <span class="delta-chip delta-new">{{ delta_counts.new }} new since last check</span>
+          <span class="delta-chip delta-resolved">{{ delta_counts.resolved }} cleared up</span>
+          <span class="delta-chip delta-ongoing">{{ delta_counts.ongoing }} still open</span>
+        </div>
+        {% endif %}
+
+        {% if cap_applied %}
+          <div class="cap-notice">
+            Showing the {{ max_findings }} most important of {{ total_findings }}. The full list is in findings.json.
+          </div>
+        {% endif %}
+
+        <div class="toolbar">
+          <div class="filter-bar" id="severity-filter">
+            <button data-filter="all" class="active">Show all</button>
+            <button data-filter="critical">Urgent</button>
+            <button data-filter="error">Likely issues</button>
+            <button data-filter="warning">Worth a look</button>
+            <button data-filter="info">Informational</button>
+          </div>
+        </div>
+        {% endif %}
+
+        <main>
+          {% if total_findings == 0 %}
+            <div class="empty-state">
+              <div class="empty-icon">&#10003;</div>
+              <div class="big">All clear — we didn't find any problems in this check.</div>
+              <div>Checked {{ date_iso }}</div>
+            </div>
+          {% else %}
+            <div id="no-results" class="no-results" hidden>No findings match your search.</div>
+            {% for group in groups %}
+              <section class="group" id="group-{{ loop.index }}">
+                <div class="group-heading" role="button" tabindex="0">
+                  <span class="group-chevron" aria-hidden="true">&#9662;</span>
+                  <span class="group-title">{{ group.label }}</span>
+                  <span class="group-count">{{ group.total_in_group }} finding{% if group.total_in_group != 1 %}s{% endif %}</span>
+                </div>
+                <div class="group-body">
+                  {% for f in group.findings_in_group %}
+                    {{ finding_card(f) }}
+                  {% endfor %}
+                </div>
+              </section>
+            {% endfor %}
+          {% endif %}
+
+          {% if suppressed %}
+            <details class="suppressed-section" id="suppressed">
+              <summary>
+                {{ suppressed | length }} finding{% if suppressed | length != 1 %}s{% endif %}
+                set aside earlier as false alarms &mdash; kept here, not deleted, and will
+                return automatically if they recur. Click to review.
+              </summary>
+              <div class="group-body">
+                {% for f in suppressed %}
+                  {{ finding_card(f) }}
+                {% endfor %}
+              </div>
+            </details>
+          {% endif %}
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <button class="to-top" id="to-top" title="Back to top" aria-label="Back to top">&#8593;</button>
 
   <script>
-    // Severity filter. Toggles hide-* classes on <body>; CSS does the rest.
+    // Filtering — severity chips + clickable stat tiles + text search.
+    // State-driven: each card's visibility is computed from the current
+    // (severity, query) state and applied as a single `card-hidden` class.
+    // No body classes, no reading layout (offsetParent), so it can't race
+    // with reflow and a collapsed group never wrongly vanishes.
     (function () {
+      var severityFilter = "all";
+      var searchQuery = "";
       var bar = document.getElementById("severity-filter");
-      if (!bar) return;
-      var ALL = ["critical", "error", "warning", "info"];
-      function applyFilter(target) {
-        ALL.forEach(function (sev) {
-          document.body.classList.remove("hide-" + sev);
+      var input = document.getElementById("search");
+      var groups = document.querySelectorAll("section.group");
+      var note = document.getElementById("no-results");
+
+      function recompute() {
+        var anyVisible = false;
+        var filtering = (severityFilter !== "all" || searchQuery !== "");
+        Array.prototype.forEach.call(groups, function (sec) {
+          var visible = 0;
+          Array.prototype.forEach.call(sec.querySelectorAll(".card"), function (card) {
+            var sev = card.getAttribute("data-severity");
+            var okSev = (severityFilter === "all" || sev === severityFilter);
+            var okText = (!searchQuery ||
+              card.textContent.toLowerCase().indexOf(searchQuery) !== -1);
+            var show = okSev && okText;
+            card.classList.toggle("card-hidden", !show);
+            if (show) visible++;
+          });
+          sec.classList.toggle("group-empty", visible === 0);
+          // While a filter is active, reveal matching groups even if the user
+          // had collapsed them — otherwise a match could stay hidden.
+          if (visible > 0 && filtering) sec.classList.remove("collapsed");
+          if (visible > 0) anyVisible = true;
         });
-        if (target !== "all") {
-          ALL.forEach(function (sev) {
-            if (sev !== target) document.body.classList.add("hide-" + sev);
+        if (note) note.hidden = anyVisible || groups.length === 0;
+      }
+
+      function setSeverity(target) {
+        severityFilter = target;
+        if (bar) {
+          Array.prototype.forEach.call(bar.querySelectorAll("button"), function (b) {
+            b.classList.toggle("active", b.getAttribute("data-filter") === target);
           });
         }
-        Array.prototype.forEach.call(bar.querySelectorAll("button"), function (b) {
-          b.classList.toggle("active", b.getAttribute("data-filter") === target);
+        Array.prototype.forEach.call(document.querySelectorAll(".stat"), function (s) {
+          s.classList.toggle("active", target !== "all" && s.getAttribute("data-filter") === target);
+        });
+        recompute();
+      }
+
+      if (bar) {
+        bar.addEventListener("click", function (e) {
+          var t = e.target.closest("button");
+          if (t) setSeverity(t.getAttribute("data-filter"));
         });
       }
-      bar.addEventListener("click", function (e) {
-        var t = e.target;
-        if (t && t.tagName === "BUTTON") applyFilter(t.getAttribute("data-filter"));
+      Array.prototype.forEach.call(document.querySelectorAll(".stat"), function (s) {
+        s.addEventListener("click", function () {
+          var f = s.getAttribute("data-filter");
+          // Clicking the active tile again clears the filter.
+          setSeverity(severityFilter === f ? "all" : f);
+        });
       });
+      if (input) {
+        input.addEventListener("input", function () {
+          searchQuery = input.value.trim().toLowerCase();
+          recompute();
+        });
+      }
+    })();
+
+    // Sidebar jump links — explicit scroll so navigation is deterministic
+    // (doesn't depend on native-anchor + CSS-smooth quirks across browsers).
+    // Expands a collapsed target, scrolls to it respecting the sticky header
+    // offset (scroll-margin-top), and highlights the entry immediately.
+    (function () {
+      var links = document.querySelectorAll(".toc-item");
+      Array.prototype.forEach.call(links, function (a) {
+        a.addEventListener("click", function (e) {
+          var href = a.getAttribute("href") || "";
+          if (href.charAt(0) !== "#") return;
+          var target = document.getElementById(href.slice(1));
+          if (!target) return;
+          e.preventDefault();
+          Array.prototype.forEach.call(links, function (x) { x.classList.remove("active"); });
+          a.classList.add("active");
+          if (history.replaceState) history.replaceState(null, "", href);
+          // #top is the sticky topbar (always pinned in view, so scrollIntoView
+          // is a no-op) — scroll the document to the very top instead.
+          if (href === "#top") {
+            window.scrollTo({ top: 0, behavior: "smooth" });
+            return;
+          }
+          if (target.classList && target.classList.contains("collapsed")) {
+            target.classList.remove("collapsed");
+          }
+          if (target.tagName === "DETAILS") target.open = true;
+          target.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+      });
+    })();
+
+    // Collapse / expand a group by clicking its heading.
+    (function () {
+      Array.prototype.forEach.call(document.querySelectorAll(".group-heading"), function (h) {
+        function toggle() { h.parentElement.classList.toggle("collapsed"); }
+        h.addEventListener("click", toggle);
+        h.addEventListener("keydown", function (e) {
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+        });
+      });
+    })();
+
+    // Scrollspy — highlight the table-of-contents entry for the group in view.
+    (function () {
+      var links = {};
+      Array.prototype.forEach.call(document.querySelectorAll(".toc-item[data-target]"), function (a) {
+        links[a.getAttribute("data-target")] = a;
+      });
+      if (!Object.keys(links).length || !("IntersectionObserver" in window)) return;
+      var obs = new IntersectionObserver(function (entries) {
+        entries.forEach(function (en) {
+          var a = links[en.target.id];
+          if (a && en.isIntersecting) {
+            Object.values(links).forEach(function (x) { x.classList.remove("active"); });
+            a.classList.add("active");
+          }
+        });
+      }, { rootMargin: "-20% 0px -70% 0px" });
+      Array.prototype.forEach.call(document.querySelectorAll("section.group"), function (s) { obs.observe(s); });
+    })();
+
+    // Back-to-top button.
+    (function () {
+      var btn = document.getElementById("to-top");
+      if (!btn) return;
+      window.addEventListener("scroll", function () {
+        btn.classList.toggle("show", window.scrollY > 500);
+      });
+      btn.addEventListener("click", function () { window.scrollTo({ top: 0, behavior: "smooth" }); });
     })();
 
     // One-click feedback. POSTs to /feedback when the brief is opened via
