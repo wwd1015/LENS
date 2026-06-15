@@ -7,11 +7,17 @@ safety integration, idempotence, hand-authored fallback).
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
-from lens.wiki.ingest import IngestionWorker, load_hand_authored
+from lens.wiki.ingest import (
+    CallCost,
+    IngestionWorker,
+    _parse_claude_json,
+    load_hand_authored,
+)
 from lens.wiki.safety import (
     UnsafePathError,
     assert_safe_to_send,
@@ -22,6 +28,54 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = REPO_ROOT / "tests/fixtures/ingest_sample"
 WIKI_SOURCE = REPO_ROOT / "lens-wiki"
 SCHEMA_EXAMPLE = WIKI_SOURCE / "rules/senior-debt-equals-pool-x-rate.md"
+
+
+# ---------------------------------------------------------------------------
+# _parse_claude_json — cost/usage extraction from `claude -p --output-format json`
+# ---------------------------------------------------------------------------
+
+
+def test_parse_claude_json_extracts_text_and_cost():
+    """A well-formed result envelope yields the text plus cost/token usage."""
+    stdout = json.dumps(
+        {
+            "type": "result",
+            "result": "the model's answer",
+            "total_cost_usd": 0.0123,
+            "usage": {
+                "input_tokens": 1200,
+                "output_tokens": 340,
+                "cache_read_input_tokens": 100,
+                "cache_creation_input_tokens": 0,
+            },
+            "session_id": "abc",
+        }
+    )
+    text, cost = _parse_claude_json(stdout)
+    assert text == "the model's answer"
+    assert isinstance(cost, CallCost)
+    assert cost.cost_usd == pytest.approx(0.0123)
+    assert cost.input_tokens == 1200
+    assert cost.output_tokens == 340
+    assert cost.cache_read_input_tokens == 100
+
+
+def test_parse_claude_json_non_json_degrades_to_text_zero_cost():
+    """Plain-text stdout (older CLI / error banner) → passthrough, zero cost."""
+    text, cost = _parse_claude_json("just some plain text, not json")
+    assert text == "just some plain text, not json"
+    assert cost == CallCost()
+    assert cost.cost_usd == 0.0
+
+
+def test_parse_claude_json_missing_usage_keeps_cost():
+    """A result without a usage block still surfaces total_cost_usd."""
+    stdout = json.dumps({"result": "hi", "total_cost_usd": 0.5})
+    text, cost = _parse_claude_json(stdout)
+    assert text == "hi"
+    assert cost.cost_usd == pytest.approx(0.5)
+    assert cost.input_tokens == 0
+    assert cost.output_tokens == 0
 
 
 # ---------------------------------------------------------------------------

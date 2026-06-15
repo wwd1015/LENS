@@ -189,6 +189,34 @@ def _fmt_num(value: Any) -> str:
     return f"{x:g}"
 
 
+def _fmt_usd(value: Any) -> str:
+    """Format a USD amount for display. Sub-dollar shows 4 dp ($0.0123)."""
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        return "$0.00"
+    if abs(x) >= 1:
+        return f"${x:,.2f}"
+    return f"${x:.4f}"
+
+
+def _rca_cost_label(rca: RCAResult) -> str:
+    """One-line 'Investigated with <model> · est. $<cost>' caption, or ''.
+
+    Both halves are optional: a session-default model (no ``model``) drops the
+    'Investigated with' clause; a zero / missing cost (e.g. a test stub) drops
+    the dollar clause. Empty string when neither is present.
+    """
+    parts: list[str] = []
+    model = getattr(rca, "model", None)
+    if model:
+        parts.append(f"Investigated with {model}")
+    cost = getattr(rca, "cost_usd", None)
+    if cost:
+        parts.append(f"estimated {_fmt_usd(cost)}")
+    return " · ".join(parts)
+
+
 def _tech_breakdown(details: dict[str, Any]) -> dict[str, Any] | None:
     """Build a reproducible calculation view from a cross-source finding.
 
@@ -426,6 +454,7 @@ def _finding_view(f: Finding, rcas: dict[str, RCAResult]) -> dict[str, Any]:
             "links": ref_links,
             "context_refs": context_refs,
             "confidence_pct": round(float(rca.confidence or 0.0) * 100),
+            "cost_label": _rca_cost_label(rca),
         }
 
     return {
@@ -457,6 +486,7 @@ def render_brief(
     prior_findings_path: Path | None = None,
     dataset_label: str = "",
     max_findings: int = 500,
+    cost_summary: dict[str, Any] | None = None,
 ) -> Path:
     """Render an HTML morning brief to ``output_path``.
 
@@ -473,6 +503,9 @@ def render_brief(
         max_findings: Hard cap on rendered cards. The full list is still in
             findings.json; this prevents the brief from blowing up on 10k+
             findings days.
+        cost_summary: Optional run-cost dict (``total_cost_usd``, ``input_tokens``,
+            ``output_tokens``, ``investigated``, ``reused``) — renders the
+            estimated LLM spend for the run. Omitted/empty hides the readout.
 
     Returns:
         ``output_path`` (for chaining).
@@ -520,6 +553,17 @@ def render_brief(
 
     summary_counts = _summary_counts(visible_findings)
 
+    # Run-cost readout — only when the run actually did (or reused) RCA work.
+    cost_view: dict[str, Any] | None = None
+    if cost_summary and (cost_summary.get("investigated") or cost_summary.get("reused")):
+        cost_view = {
+            "total_usd": _fmt_usd(cost_summary.get("total_cost_usd") or 0.0),
+            "input_tokens": f"{int(cost_summary.get('input_tokens') or 0):,}",
+            "output_tokens": f"{int(cost_summary.get('output_tokens') or 0):,}",
+            "investigated": int(cost_summary.get("investigated") or 0),
+            "reused": int(cost_summary.get("reused") or 0),
+        }
+
     # Inline the styles so the output is fully self-contained. The CSS is
     # marked `safe` in the template (CSS is not user-controlled), but every
     # other variable goes through autoescape.
@@ -545,6 +589,7 @@ def render_brief(
         visible_count=len(visible_findings),
         cap_applied=cap_applied,
         max_findings=max_findings,
+        cost=cost_view,
         styles_inline=styles_inline,
     )
 

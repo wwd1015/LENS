@@ -12,13 +12,15 @@ human-authored rule pages instead.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import shutil
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 import yaml
 
@@ -37,8 +39,75 @@ shipped schema."""
 class LLMClient(Protocol):
     """Minimal LLM interface — `prompt -> completion`. Tests pass stubs."""
 
-    def complete(self, prompt: str) -> str:
-        ...
+    def complete(self, prompt: str) -> str: ...
+
+
+@dataclass
+class CallCost:
+    """Per-call cost + token usage from `claude -p --output-format json`.
+
+    ``cost_usd`` is Claude Code's own client-side ESTIMATE (computed from a
+    bundled price table), not authoritative billing — which is exactly the
+    right granularity for tracking per-run spend. We deliberately read the
+    number the CLI already computes rather than maintain our own price table.
+    A zero-filled instance is the graceful-degradation value when the CLI did
+    not return parseable JSON.
+    """
+
+    cost_usd: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+
+
+def _coerce_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _coerce_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _parse_claude_json(stdout: str) -> tuple[str, CallCost]:
+    """Parse `claude -p --output-format json` stdout into ``(text, CallCost)``.
+
+    Degrades gracefully: if ``stdout`` is not the expected JSON object (an older
+    CLI emitting plain text, an error banner, or a future format change), the
+    raw stdout is returned as the completion text with a zero-cost record — the
+    caller still gets a usable string and never crashes on cost accounting.
+    """
+    try:
+        payload = json.loads(stdout)
+    except (json.JSONDecodeError, TypeError):
+        return stdout, CallCost()
+    if not isinstance(payload, dict):
+        return stdout, CallCost()
+
+    # `result` carries the model's text; `structured_output` is used instead
+    # when the call was made with --json-schema (we don't, but stay robust).
+    text = payload.get("result")
+    if text is None:
+        text = payload.get("structured_output")
+    if not isinstance(text, str):
+        text = "" if text is None else json.dumps(text)
+
+    usage = payload.get("usage")
+    usage = usage if isinstance(usage, dict) else {}
+    cost = CallCost(
+        cost_usd=_coerce_float(payload.get("total_cost_usd")),
+        input_tokens=_coerce_int(usage.get("input_tokens")),
+        output_tokens=_coerce_int(usage.get("output_tokens")),
+        cache_read_input_tokens=_coerce_int(usage.get("cache_read_input_tokens")),
+        cache_creation_input_tokens=_coerce_int(usage.get("cache_creation_input_tokens")),
+    )
+    return text, cost
 
 
 class ClaudeCodeClient:
@@ -46,9 +115,12 @@ class ClaudeCodeClient:
 
     LENS runs in environments where the only available authentication is the
     user's Claude Code SSO session — there is no Anthropic API key. To use that
-    session, this client shells out to `claude -p "<prompt>" --output-format text`
-    as a subprocess and reads stdout. Tests use a stub and never invoke this
-    class.
+    session, this client shells out to `claude -p "<prompt>" --output-format json`
+    as a subprocess and reads stdout. The JSON envelope carries both the model's
+    text (``result``) and Claude Code's per-call cost estimate
+    (``total_cost_usd`` + ``usage``), so every completion records its own cost
+    as a side effect — see :attr:`last_call` / :attr:`total_cost_usd`. Tests use
+    a stub and never invoke this class.
 
     Parameters
     ----------
@@ -58,8 +130,8 @@ class ClaudeCodeClient:
         Subprocess timeout in seconds.
     extra_args:
         Optional list of additional flags passed to `claude` (e.g.
-        `--model claude-opus-4-7`). The prompt and `--output-format text` are
-        always appended.
+        `--model opus`). The prompt and `--output-format json` are always
+        appended.
     """
 
     def __init__(
@@ -71,9 +143,20 @@ class ClaudeCodeClient:
         self.executable = executable
         self.timeout_s = timeout_s
         self.extra_args = list(extra_args or [])
+        # Cost accounting side-channel: the LLMClient Protocol stays
+        # `complete(prompt) -> str`, but a real Claude Code call also records
+        # what it cost here. Callers that care (batch RCA) read `last_call`
+        # right after `complete`; stubs simply don't set these attributes.
+        self.calls: list[CallCost] = []
+        self.last_call: CallCost | None = None
+
+    @property
+    def total_cost_usd(self) -> float:
+        """Sum of every recorded call's estimated cost this client made."""
+        return sum(c.cost_usd for c in self.calls)
 
     def complete(self, prompt: str) -> str:
-        cmd = [self.executable, "-p", prompt, "--output-format", "text"]
+        cmd = [self.executable, "-p", prompt, "--output-format", "json"]
         if self.extra_args:
             cmd.extend(self.extra_args)
         try:
@@ -94,10 +177,11 @@ class ClaudeCodeClient:
                 f"claude headless run failed (rc={e.returncode}): {e.stderr.strip()}"
             ) from e
         except subprocess.TimeoutExpired as e:
-            raise RuntimeError(
-                f"claude headless run timed out after {self.timeout_s}s"
-            ) from e
-        return result.stdout
+            raise RuntimeError(f"claude headless run timed out after {self.timeout_s}s") from e
+        text, cost = _parse_claude_json(result.stdout)
+        self.calls.append(cost)
+        self.last_call = cost
+        return text
 
 
 def _slugify(name: str) -> str:
@@ -210,9 +294,7 @@ class IngestionWorker:
                 eq = fm.get("equation") or {}
                 lhs = eq.get("lhs") or {}
                 if not lhs.get("table"):
-                    raise _TransientIngestError(
-                        "response missing equation.lhs.table"
-                    )
+                    raise _TransientIngestError("response missing equation.lhs.table")
                 return page, fm, raw
             except Exception as e:  # noqa: BLE001 — retry on anything LLM-side
                 last_exc = e
@@ -269,9 +351,7 @@ class IngestionWorker:
 
         schema_example = self._read_schema_example()
         sql = "\n\n".join(Path(p).read_text() for p in code_paths)
-        lineage = (
-            Path(lineage_yaml).read_text() if lineage_yaml is not None else ""
-        )
+        lineage = Path(lineage_yaml).read_text() if lineage_yaml is not None else ""
         prompt = self._build_prompt(sql, lineage, schema_example)
 
         logger.info(
@@ -328,15 +408,12 @@ def load_hand_authored(rules_dir: Path, wiki_root: Path) -> list[Path]:
         text = page_path.read_text()
         fm = _parse_frontmatter(text)
         if not fm.get("name"):
-            raise ValueError(
-                f"{page_path}: missing required frontmatter field 'name'"
-            )
+            raise ValueError(f"{page_path}: missing required frontmatter field 'name'")
         eq = fm.get("equation") or {}
         lhs = eq.get("lhs") or {}
         if not lhs.get("table"):
             raise ValueError(
-                f"{page_path}: missing required frontmatter field "
-                f"'equation.lhs.table'"
+                f"{page_path}: missing required frontmatter field 'equation.lhs.table'"
             )
         dst = dst_dir / page_path.name
         shutil.copyfile(page_path, dst)

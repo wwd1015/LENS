@@ -172,7 +172,7 @@ equation:
 
 ## LLM access
 
-All runtime LLM calls go through **Claude Code headless mode** — `ClaudeCodeClient` shells out to `claude -p "<prompt>" --output-format text`. The `anthropic` Python SDK is **not** used; LENS environments authenticate via Claude Code SSO. Tests inject deterministic stubs through the `LLMClient` Protocol and never touch the network.
+All runtime LLM calls go through **Claude Code headless mode** — `ClaudeCodeClient` shells out to `claude -p "<prompt>" --output-format json`, reading the model's text plus Claude Code's per-call cost estimate (`total_cost_usd` + `usage`) from the JSON envelope. The `anthropic` Python SDK is **not** used; LENS environments authenticate via Claude Code SSO. Tests inject deterministic stubs through the `LLMClient` Protocol and never touch the network. Per-run LLM spend (an estimate, not authoritative billing) is rolled up onto `BatchResult.total_cost_usd` and shown on the brief / digest / CLI.
 
 ## Tests
 

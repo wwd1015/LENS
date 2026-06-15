@@ -108,6 +108,25 @@ def _confidence_pct(confidence: float) -> int:
     return int(round(confidence * 100))
 
 
+def _format_cost_footer(cost_summary: dict[str, Any] | None) -> str | None:
+    """One-line 'est. LLM cost' footer for the digest, or ``None`` to omit."""
+    if not cost_summary:
+        return None
+    investigated = int(cost_summary.get("investigated") or 0)
+    reused = int(cost_summary.get("reused") or 0)
+    if not (investigated or reused):
+        return None
+    total = float(cost_summary.get("total_cost_usd") or 0.0)
+    usd = f"${total:,.2f}" if total >= 1 else f"${total:.4f}"
+    detail = f"{investigated} investigated"
+    if reused:
+        detail += f", {reused} reused free"
+    return (
+        f"_Estimated LLM cost this run: {usd} ({detail}) — "
+        "Claude Code estimate, not authoritative billing._"
+    )
+
+
 def render_brief_summary(
     findings: list[Finding],
     rcas: dict[str, RCAResult] | None = None,
@@ -115,6 +134,7 @@ def render_brief_summary(
     top_n: int = 5,
     dataset_label: str = "",
     date_iso: str | None = None,
+    cost_summary: dict[str, Any] | None = None,
 ) -> str:
     """Render the top-N findings as a Slack-pasteable markdown digest.
 
@@ -126,6 +146,8 @@ def render_brief_summary(
         top_n: Maximum number of findings to render in the digest.
         dataset_label: Free-text label shown in the header (e.g. "Q1 lending").
         date_iso: Optional ISO date string for the header. Defaults to today.
+        cost_summary: Optional run-cost dict; appends an estimated-LLM-cost
+            footer line when the run did (or reused) RCA work.
 
     Returns:
         A markdown-formatted string ready for stdout / clipboard / Slack paste.
@@ -181,6 +203,11 @@ def render_brief_summary(
         if reference_url:
             line += f" [→ {reference_url}]"
         lines.append(line)
+
+    cost_footer = _format_cost_footer(cost_summary)
+    if cost_footer:
+        lines.append("")
+        lines.append(cost_footer)
 
     return "\n".join(lines) + "\n"
 
@@ -254,12 +281,30 @@ def _load_rcas(rca_dir: Path) -> dict[str, RCAResult]:
         if not isinstance(payload, dict):
             continue
         finding_id = payload.get("finding_id") or json_path.stem
+
+        def _opt_float(v: Any) -> float | None:
+            try:
+                return float(v) if v is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        def _opt_int(v: Any) -> int | None:
+            try:
+                return int(v) if v is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        model = payload.get("model")
         rcas[finding_id] = RCAResult(
             finding_id=finding_id,
             hypothesis=payload.get("hypothesis", ""),
             evidence=list(payload.get("evidence", []) or []),
             confidence=float(payload.get("confidence", 0.0)),
             references=list(payload.get("references", []) or []),
+            cost_usd=_opt_float(payload.get("cost_usd")),
+            input_tokens=_opt_int(payload.get("input_tokens")),
+            output_tokens=_opt_int(payload.get("output_tokens")),
+            model=str(model) if model is not None else None,
         )
     return rcas
 

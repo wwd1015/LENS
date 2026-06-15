@@ -159,10 +159,20 @@ def finding_group_key(finding: Finding) -> tuple[str, str]:
 
 @dataclass
 class RCAResult:
-    """Output of the RCA agent for a single Finding."""
+    """Output of the RCA agent for a single Finding.
+
+    The trailing ``cost_*`` / ``model`` fields record what the LLM call that
+    produced this result cost (Claude Code's per-call estimate) and which model
+    answered. They are optional and default to ``None`` so older persisted RCA
+    JSON loads unchanged and non-cost-aware stubs keep working.
+    """
 
     finding_id: str
     hypothesis: str
     evidence: list[str] = field(default_factory=list)
     confidence: float = 0.0
     references: list[str] = field(default_factory=list)
+    cost_usd: float | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    model: str | None = None

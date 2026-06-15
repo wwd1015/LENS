@@ -37,6 +37,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
     suppressed = sum(
         1 for f in result.findings if (f.issue.details or {}).get("suppressed_by_feedback")
     )
+    did_rca = bool(result.rca_groups_investigated or result.rca_groups_reused)
+    cost = result.total_cost_usd
+    cost_str = f"${cost:,.2f}" if cost >= 1 else f"${cost:.4f}"
     print(result.markdown_digest)
     print(
         f"run {result.run_id}: {len(result.findings)} findings"
@@ -56,7 +59,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
             f", {result.rca_groups_skipped_over_cap} skipped over max_investigations cap"
             if result.rca_groups_skipped_over_cap
             else ""
-        ),
+        )
+        + (f"; estimated LLM cost {cost_str}" if did_rca else ""),
         file=sys.stderr,
     )
     print(f"findings: {result.findings_path}", file=sys.stderr)

@@ -614,6 +614,7 @@ class RCAAgent:
             response = self.client.complete(prompt)
         except Exception as exc:  # noqa: BLE001 - surface as low-confidence RCA
             logger.exception("rca: LLM call failed: %s", exc)
+            # No successful call → no cost to attribute.
             return RCAResult(
                 finding_id=finding.finding_id,
                 hypothesis=f"LLM call failed: {exc}",
@@ -622,11 +623,28 @@ class RCAAgent:
                 references=list(commit_urls),
             )
 
-        return _parse_rca_response(
+        result = _parse_rca_response(
             response,
             finding_id=finding.finding_id,
             fallback_references=commit_urls,
         )
+        return self._attach_call_cost(result)
+
+    def _attach_call_cost(self, rca: RCAResult) -> RCAResult:
+        """Stamp the just-completed call's cost onto ``rca``, if the client
+        exposes one.
+
+        A :class:`~lens.wiki.ingest.ClaudeCodeClient` records the cost of the
+        call it just made on ``last_call``; we read it immediately after
+        ``complete`` returns (batch RCA is sequential, so ``last_call`` is this
+        finding's call). Stub clients don't set it, so cost stays ``None``.
+        """
+        call = getattr(self.client, "last_call", None)
+        if call is not None:
+            rca.cost_usd = getattr(call, "cost_usd", None)
+            rca.input_tokens = getattr(call, "input_tokens", None)
+            rca.output_tokens = getattr(call, "output_tokens", None)
+        return rca
 
     def save(
         self,

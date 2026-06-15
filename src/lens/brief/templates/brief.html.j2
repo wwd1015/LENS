@@ -57,6 +57,7 @@
                       {% endfor %}
                     </div>
                   {% endif %}
+                  {% if f.rca.cost_label %}<div class="cause-cost">{{ f.rca.cost_label }}</div>{% endif %}
                 </div>
               {% endif %}
 
@@ -218,6 +219,18 @@
             <span class="stat-label">Informational</span>
           </button>
         </section>
+
+        {% if cost %}
+        <div class="cost-row">
+          <span class="cost-chip" title="Estimated by Claude Code per call (client-side estimate, not authoritative billing).">
+            <span class="cost-amt">{{ cost.total_usd }}</span>
+            <span class="cost-label">estimated LLM cost this run</span>
+          </span>
+          <span class="cost-meta">
+            {{ cost.investigated }} investigated{% if cost.reused %} &middot; {{ cost.reused }} reused free{% endif %}{% if cost.output_tokens != "0" %} &middot; {{ cost.input_tokens }} in / {{ cost.output_tokens }} out tokens{% endif %}
+          </span>
+        </div>
+        {% endif %}
 
         {% if delta_counts %}
         <div class="delta-row">

@@ -241,6 +241,34 @@ a { color: var(--accent); }
 .delta-resolved { background: #fdeeee; color: #b5372a; }
 .delta-ongoing { background: var(--line-soft); color: var(--ink-soft); }
 
+/* ---- Run cost readout --------------------------------------------------- */
+.cost-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 0.7rem;
+    margin-bottom: 1rem;
+}
+.cost-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.4rem;
+    padding: 0.22rem 0.7rem;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    border: 1px solid #dcdcfb;
+    cursor: default;
+}
+.cost-amt { font-weight: 750; font-size: 0.95rem; }
+.cost-label { font-size: 0.78rem; font-weight: 600; }
+.cost-meta { font-size: 0.78rem; color: var(--ink-faint); }
+.cause-cost {
+    margin-top: 0.5rem;
+    font-size: 0.74rem;
+    color: var(--ink-faint);
+}
+
 .cap-notice {
     background: var(--warn-bg);
     border: 1px solid #fde7a9;

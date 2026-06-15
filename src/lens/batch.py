@@ -66,6 +66,23 @@ class BatchResult:
     rca_groups_reused: int = 0
     rca_groups_skipped_below_floor: int = 0
     rca_groups_skipped_over_cap: int = 0
+    # LLM spend for THIS run — fresh investigations only. Reused groups cost
+    # $0 of new spend (that's the point of reuse_prior_rca), though each reused
+    # card still shows its original per-finding cost. Estimated by Claude Code.
+    total_cost_usd: float = 0.0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+
+    @property
+    def cost_summary(self) -> dict[str, float | int]:
+        """Compact run-cost dict for the brief / digest / CLI summary."""
+        return {
+            "total_cost_usd": self.total_cost_usd,
+            "input_tokens": self.total_input_tokens,
+            "output_tokens": self.total_output_tokens,
+            "investigated": self.rca_groups_investigated,
+            "reused": self.rca_groups_reused,
+        }
 
 
 def _build_orchestrator(cfg: RunConfig) -> DetectionOrchestrator:
@@ -256,7 +273,8 @@ def run_batch(
             fresh = fresh[:cap]
 
         for key, members, rep in fresh:
-            agent = _agent_for(_rca_model_for(cfg, rep.issue.severity))
+            model_used = _rca_model_for(cfg, rep.issue.severity)
+            agent = _agent_for(model_used)
             try:
                 rca = agent.investigate(
                     rep,
@@ -268,11 +286,17 @@ def run_batch(
                     sample_rows=cfg.rca.sample_rows,
                     max_commits=cfg.rca.max_commits,
                 )
+                rca.model = model_used
                 agent.save(rca, actual_run_id)
             except Exception as exc:  # noqa: BLE001 - one bad group must not kill the brief
                 logger.exception("batch: RCA failed for group %s: %s", key, exc)
                 continue
             result.rca_groups_investigated += 1
+            # Accumulate this run's NEW spend (reused groups are not counted —
+            # they cost nothing this run).
+            result.total_cost_usd += rca.cost_usd or 0.0
+            result.total_input_tokens += rca.input_tokens or 0
+            result.total_output_tokens += rca.output_tokens or 0
             # The group shares one hypothesis — attach it to every member so
             # each brief card can render it.
             for member in members:
@@ -286,6 +310,7 @@ def run_batch(
         brief_path,
         prior_findings_path=prior_findings,
         dataset_label=cfg.brief.dataset_label,
+        cost_summary=result.cost_summary,
     )
     _atomic_symlink(brief_path.name, cfg.output_dir / "brief.latest.html")
     result.brief_html_path = brief_path
@@ -295,5 +320,6 @@ def run_batch(
         result.rcas,
         top_n=cfg.brief.top_n,
         dataset_label=cfg.brief.dataset_label,
+        cost_summary=result.cost_summary,
     )
     return result

@@ -155,7 +155,7 @@ In the batch path, RCA runs **once per Finding Group** — findings sharing `fin
 
 ## LLM Access Pattern
 
-All runtime LLM calls go through Claude Code headless mode — `ClaudeCodeClient` shells out to `claude -p "<prompt>" --output-format text` as a subprocess. NO `anthropic` SDK is used; LENS environments authenticate via Claude Code SSO only. Both `src/lens/wiki/ingest.py` and `src/lens/rca/agent.py` accept any object conforming to the `LLMClient` Protocol, so unit tests inject deterministic stubs and never hit the network.
+All runtime LLM calls go through Claude Code headless mode — `ClaudeCodeClient` shells out to `claude -p "<prompt>" --output-format json` as a subprocess. The JSON envelope carries both the model's text (`result`) and Claude Code's own per-call cost estimate (`total_cost_usd` + `usage`), so each call records its cost as a side effect (`CallCost` on the client) without LENS maintaining a price table. NO `anthropic` SDK is used; LENS environments authenticate via Claude Code SSO only. Both `src/lens/wiki/ingest.py` and `src/lens/rca/agent.py` accept any object conforming to the `LLMClient` Protocol, so unit tests inject deterministic stubs and never hit the network. `total_cost_usd` is a client-side ESTIMATE (not authoritative billing); the batch rolls fresh-investigation cost into `BatchResult.total_cost_usd` and the brief / digest / CLI surface it labeled "estimated".
 
 ## Adding a New Check
 

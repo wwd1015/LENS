@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import os
 
+import pytest
+
 from lens.batch import run_batch
 from lens.run_config import load_run_config
 from lens.types import Severity
+from lens.wiki.ingest import CallCost
 
 RCA_RESPONSE = """\
 ```json
@@ -29,6 +32,27 @@ class StubLLM:
 
     def complete(self, prompt: str) -> str:
         self.prompts.append(prompt)
+        return self.response
+
+
+class CostStubLLM:
+    """Stub that also reports a per-call cost, the way ClaudeCodeClient does.
+
+    Sets ``last_call`` on each ``complete`` so the RCA agent can attribute the
+    call's cost to the result — exercising the cost-tracking path end to end.
+    """
+
+    def __init__(self, response: str = RCA_RESPONSE, cost_usd: float = 0.02) -> None:
+        self.response = response
+        self.prompts: list[str] = []
+        self._cost_usd = cost_usd
+        self.last_call: CallCost | None = None
+
+    def complete(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        self.last_call = CallCost(
+            cost_usd=self._cost_usd, input_tokens=1000, output_tokens=200
+        )
         return self.response
 
 
@@ -205,6 +229,54 @@ def test_batch_reuse_disabled_reinvestigates(tmp_path):
     assert second.rca_groups_investigated == 1
     assert second.rca_groups_reused == 0
     assert len(stub2.prompts) == 1
+
+
+def test_batch_tracks_llm_cost(tmp_path):
+    cfg = _write_config(tmp_path)
+    stub = CostStubLLM(cost_usd=0.02)
+
+    result = run_batch(cfg, run_id="cost1", llm_client=stub)
+
+    # One fresh investigation → its cost rolls up to the run total.
+    assert result.rca_groups_investigated == 1
+    assert result.total_cost_usd == pytest.approx(0.02)
+    assert result.total_input_tokens == 1000
+    assert result.total_output_tokens == 200
+
+    # Cost + model attached to every member's RCAResult.
+    assert all(r.cost_usd == pytest.approx(0.02) for r in result.rcas.values())
+    assert all(r.model == "sonnet" for r in result.rcas.values())  # ERROR → bulk model
+
+    # Brief surfaces the run cost and the per-card caption, clearly labelled
+    # as an estimate.
+    html = result.brief_html_path.read_text(encoding="utf-8")
+    assert "estimated LLM cost this run" in html
+    assert "not authoritative billing" in html  # tooltip disclaimer
+    assert "$0.0200" in html
+    assert "Investigated with sonnet" in html
+    # Digest footer carries the cost too, labelled as an estimate.
+    assert "Estimated LLM cost this run" in result.markdown_digest
+
+
+def test_batch_reused_rca_costs_zero_new_but_keeps_prior_cost(tmp_path):
+    cfg = _write_config(tmp_path)
+    first = run_batch(cfg, run_id="c1", llm_client=CostStubLLM(cost_usd=0.05))
+    assert first.total_cost_usd == pytest.approx(0.05)
+
+    # Second run reuses the prior hypothesis → zero NEW spend, even though this
+    # stub would have charged 0.99 had it actually re-investigated.
+    stub2 = CostStubLLM(cost_usd=0.99)
+    second = run_batch(cfg, run_id="c2", llm_client=stub2)
+    assert second.rca_groups_reused == 1
+    assert second.rca_groups_investigated == 0
+    assert stub2.prompts == []
+    assert second.total_cost_usd == pytest.approx(0.0)
+
+    # The reused result still carries its ORIGINAL cost (loaded from disk), so
+    # the per-card caption shows what the investigation cost when first run.
+    assert all(r.cost_usd == pytest.approx(0.05) for r in second.rcas.values())
+    html = second.brief_html_path.read_text(encoding="utf-8")
+    assert "$0.0500" in html
 
 
 def test_batch_rca_disabled(tmp_path):
