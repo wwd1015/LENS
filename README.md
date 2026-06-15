@@ -201,6 +201,20 @@ suite.add(
 
 The detector computes the aggregate at every depth (portfolio → asset_class → asset_class+vintage), z-scores each (segment, snapshot) against the slice's own history, and emits one Issue per "leaf" — the deepest still-anomalous path. A spike that's only visible at `commercial > 2024Q3` produces one Issue at depth 2 (suppressing the portfolio and asset_class-level findings as ancestors). A spike at the `commercial` level with no anomalous descendant produces a depth-1 Issue. The `details["segment_path"]` field carries the structured path for the brief to render.
 
+## Controlling RCA token cost
+
+RCA is the only runtime LLM cost — one `claude -p` call per Finding Group. The `rca:` block in the run config bounds it:
+
+| Knob | Default | Effect |
+|---|---|---|
+| `reuse_prior_rca` | `true` | An ongoing finding (same `finding_id` as last run = same immutable snapshot) reuses last run's hypothesis with **no LLM call**. The biggest steady-state saver — a daily cron mostly re-sees yesterday's findings. |
+| `model` | `sonnet` | Tier alias (`haiku`/`sonnet`/`opus`/`fable`) for the bulk. Default `sonnet` balances RCA quality against cost — RCA must reason from data → lineage → commit, so Haiku is too weak; Sonnet is the speed/intelligence sweet spot. `null` uses the Claude Code session default. |
+| `escalate_model` / `escalate_severity` | `opus` / `critical` | Route the worst findings to a stronger model. `null` disables. |
+| `max_investigations` | none | Hard cap on **new** investigations per run (reused ones are free) — bounds worst-case cost on an incident day. |
+| `sample_rows` / `max_commits` | `5` / `5` | Per-prompt context size. |
+
+**On prompt caching:** there isn't any across calls. Each `claude -p` invocation is an independent subprocess with no shared prompt cache, and `-p` has no session resume — so re-sending the same wiki/lineage context on every RCA can't be cached away through the CLI. `reuse_prior_rca` (skip the call entirely) and the context knobs are the real levers. True prefix caching would require the Anthropic SDK, which `docs/adr/0002` deliberately rejects (LENS authenticates via Claude Code SSO, not an API key).
+
 ## Deliberately deferred (eval-gated)
 
 Two LLM-heavy capabilities exist as eval-gated experiments, deliberately not

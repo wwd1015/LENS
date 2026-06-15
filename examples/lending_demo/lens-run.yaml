@@ -29,9 +29,12 @@ rca:
   # lineage page (repo_url + recent_changes). RCA links the pipeline commit
   # from that declaration; it does not point at LENS's own source.
   repo_root: ../..
-  # Token / cost controls (each investigation is one LLM call):
-  # max_investigations: 10            # hard cap on RCA calls per run
-  # model: claude-haiku-4-5-20251001  # cheaper model for RCA
+  # Token / cost controls (defaults shown; uncomment to override):
+  # reuse_prior_rca: true             # reuse an ongoing finding's prior hypothesis (no LLM call)
+  # model: sonnet                     # tier alias for the bulk (null = session default)
+  # escalate_model: opus              # stronger model for critical findings (null = off)
+  # escalate_severity: critical       # severity at/above which to escalate
+  # max_investigations: 10            # hard cap on NEW RCA calls per run
   # sample_rows: 5                    # data rows per prompt (context size)
   # max_commits: 5                    # commits per producing path
 

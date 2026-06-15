@@ -108,9 +108,12 @@ def test_full_config_round_trip(tmp_path):
     assert cfg.rca.enabled is False
     assert cfg.rca.severity_floor is Severity.WARNING
     assert cfg.feedback.expiry_days == 30
-    # Cost controls default when unspecified.
+    # Cost controls: cost-optimized defaults when unspecified.
     assert cfg.rca.max_investigations is None
-    assert cfg.rca.model is None
+    assert cfg.rca.reuse_prior_rca is True
+    assert cfg.rca.model == "sonnet"  # balanced bulk default (tier alias)
+    assert cfg.rca.escalate_model == "opus"
+    assert cfg.rca.escalate_severity is Severity.CRITICAL
     assert cfg.rca.sample_rows == 5
     assert cfg.rca.max_commits == 5
     assert cfg.brief.dataset_label == "Test portfolio"
@@ -137,6 +140,23 @@ def test_rca_cost_controls_parsed(tmp_path):
     assert cfg.rca.model == "claude-haiku-4-5-20251001"
     assert cfg.rca.sample_rows == 2
     assert cfg.rca.max_commits == 3
+
+
+def test_rca_model_null_uses_session_default(tmp_path):
+    _touch_csv(tmp_path)
+    cfg = load_run_config(
+        _write(
+            tmp_path,
+            """
+            sources: {loans: data.csv}
+            rca:
+              model: null            # explicit null → session default
+              escalate_model: null   # disable escalation
+            """,
+        )
+    )
+    assert cfg.rca.model is None
+    assert cfg.rca.escalate_model is None
 
 
 def test_env_interpolation(tmp_path, monkeypatch):

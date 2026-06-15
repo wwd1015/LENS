@@ -13,6 +13,22 @@ brief" path. It composes the pieces that already exist as libraries:
    returned for stdout / Slack.
 
 Per-group RCA failures are logged and skipped; the brief still renders.
+
+Token / cost controls (all configurable under ``rca:``):
+
+* **reuse_prior_rca** — an ongoing finding (same finding_id as last run, i.e.
+  same immutable snapshot) reuses last run's hypothesis with no LLM call. The
+  biggest steady-state saver for a daily cron.
+* **Tiered model routing** — the bulk runs on ``model`` (default the ``sonnet``
+  tier, balancing RCA quality against cost); findings at/above
+  ``escalate_severity`` go to the stronger ``escalate_model`` (default ``opus``).
+* **max_investigations** — caps NEW investigations per run (reused are free).
+* **sample_rows / max_commits** — bound the per-prompt context size.
+
+Note: cross-call prompt caching is NOT available — each ``claude -p`` headless
+invocation is an independent subprocess with no shared cache, and ``-p`` has no
+session resume (see ADR 0002). The levers above are what control token spend;
+real prefix caching would require the Anthropic SDK, which ADR 0002 rejects.
 """
 
 from __future__ import annotations
@@ -24,12 +40,12 @@ from pathlib import Path
 import polars as pl
 
 from lens.brief.html import render_brief
-from lens.brief.markdown import render_brief_summary
+from lens.brief.markdown import _load_rcas, render_brief_summary
 from lens.feedback_loop import is_suppressed
 from lens.orchestrator import DetectionOrchestrator, _atomic_symlink, _materialize_source
 from lens.rca.agent import RCAAgent
 from lens.run_config import RunConfig
-from lens.types import SEVERITY_ORDER, Finding, RCAResult, finding_group_key
+from lens.types import SEVERITY_ORDER, Finding, RCAResult, Severity, finding_group_key
 from lens.wiki.cache import WikiCache
 from lens.wiki.ingest import ClaudeCodeClient, LLMClient
 
@@ -47,6 +63,7 @@ class BatchResult:
     brief_html_path: Path | None = None
     markdown_digest: str = ""
     rca_groups_investigated: int = 0
+    rca_groups_reused: int = 0
     rca_groups_skipped_below_floor: int = 0
     rca_groups_skipped_over_cap: int = 0
 
@@ -60,18 +77,45 @@ def _build_orchestrator(cfg: RunConfig) -> DetectionOrchestrator:
     return orch
 
 
-def _build_rca_client(cfg: RunConfig, llm_client: LLMClient | None) -> LLMClient | None:
-    """Pick the LLM client for RCA.
+def _rca_model_for(cfg: RunConfig, severity: Severity) -> str | None:
+    """Pick the model for a group of this severity (tiered routing).
 
-    An injected client (tests) always wins. Otherwise, when ``rca.model`` is
-    set, build a :class:`ClaudeCodeClient` pinned to that model (e.g. a cheaper
-    tier) for cost control; else ``None`` lets :class:`RCAAgent` use its
-    default client.
+    Findings at/above ``escalate_severity`` go to the stronger
+    ``escalate_model``; everything else uses the cheap bulk ``model``.
+    ``None`` means Claude Code's session default.
+    """
+    if cfg.rca.escalate_model and SEVERITY_ORDER.get(severity, -1) >= SEVERITY_ORDER.get(
+        cfg.rca.escalate_severity, 99
+    ):
+        return cfg.rca.escalate_model
+    return cfg.rca.model
+
+
+def _client_for_model(
+    model: str | None,
+    llm_client: LLMClient | None,
+    cache: dict[str | None, LLMClient | None],
+) -> LLMClient | None:
+    """Resolve (and cache) the LLM client for a model string.
+
+    An injected client (tests) always wins, regardless of model. Otherwise a
+    :class:`ClaudeCodeClient` pinned to ``model`` (or ``None`` → session
+    default). Cached so a run builds at most one client per model.
     """
     if llm_client is not None:
         return llm_client
-    if cfg.rca.model:
-        return ClaudeCodeClient(extra_args=["--model", cfg.rca.model])
+    if model not in cache:
+        cache[model] = ClaudeCodeClient(extra_args=["--model", model]) if model else None
+    return cache[model]
+
+
+def _prior_run_id(prior_findings: Path | None) -> str | None:
+    """Extract the prior run id from a ``findings.<run_id>.json`` path."""
+    if prior_findings is None:
+        return None
+    name = prior_findings.name
+    if name.startswith("findings.") and name.endswith(".json"):
+        return name[len("findings.") : -len(".json")]
     return None
 
 
@@ -154,16 +198,31 @@ def run_batch(
     # --- batch RCA: one investigation per Finding Group (ADR 0003) -------
     if cfg.rca.enabled and findings:
         wiki = WikiCache.from_dir(cfg.wiki_root) if cfg.wiki_root else WikiCache()
-        agent = RCAAgent(
-            repo_root=cfg.rca.repo_root,
-            client=_build_rca_client(cfg, llm_client),
-            output_dir=cfg.output_dir,
-        )
+        # One RCAAgent per model (tiered routing); clients are cached so a run
+        # builds at most one subprocess client per model.
+        client_cache: dict[str | None, LLMClient | None] = {}
+        agent_cache: dict[str | None, RCAAgent] = {}
+
+        def _agent_for(model: str | None) -> RCAAgent:
+            if model not in agent_cache:
+                agent_cache[model] = RCAAgent(
+                    repo_root=cfg.rca.repo_root,
+                    client=_client_for_model(model, llm_client, client_cache),
+                    output_dir=cfg.output_dir,
+                )
+            return agent_cache[model]
+
         floor = SEVERITY_ORDER[cfg.rca.severity_floor]
 
-        # Collect groups above the floor, then keep the most important ones up
-        # to `max_investigations` — each investigation is one LLM call, so this
-        # bounds worst-case token cost on an incident day.
+        # Prior run's hypotheses, for reuse (ongoing findings keep last run's
+        # RCA — same finding_id = same immutable snapshot, so it still holds).
+        prior_rcas: dict[str, RCAResult] = {}
+        if cfg.rca.reuse_prior_rca:
+            prior_id = _prior_run_id(prior_findings)
+            if prior_id:
+                prior_rcas = _load_rcas(cfg.output_dir / "rca" / prior_id)
+
+        # Collect groups above the floor, sorted most-important first.
         eligible: list[tuple[tuple[str, str], list[Finding], Finding]] = []
         for key, members in _group_for_rca(findings).items():
             rep = _group_representative(members)
@@ -178,12 +237,26 @@ def run_batch(
                 t[0],
             )
         )
-        cap = cfg.rca.max_investigations
-        if cap is not None and len(eligible) > cap:
-            result.rca_groups_skipped_over_cap = len(eligible) - cap
-            eligible = eligible[:cap]
 
+        # Reuse first (free), so the investigation cap only bounds NEW calls.
+        fresh: list[tuple[tuple[str, str], list[Finding], Finding]] = []
         for key, members, rep in eligible:
+            reused = prior_rcas.get(rep.finding_id)
+            if reused is not None:
+                _agent_for(cfg.rca.model).save(reused, actual_run_id)
+                for member in members:
+                    result.rcas[member.finding_id] = reused
+                result.rca_groups_reused += 1
+            else:
+                fresh.append((key, members, rep))
+
+        cap = cfg.rca.max_investigations
+        if cap is not None and len(fresh) > cap:
+            result.rca_groups_skipped_over_cap = len(fresh) - cap
+            fresh = fresh[:cap]
+
+        for key, members, rep in fresh:
+            agent = _agent_for(_rca_model_for(cfg, rep.issue.severity))
             try:
                 rca = agent.investigate(
                     rep,

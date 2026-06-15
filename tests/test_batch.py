@@ -140,21 +140,71 @@ def test_batch_max_investigations_caps_llm_calls(tmp_path):
     assert len(stub.prompts) == 1
 
 
-def test_build_rca_client_respects_model_and_injection(tmp_path):
-    from lens.batch import _build_rca_client
-    from lens.wiki.ingest import ClaudeCodeClient
+def test_rca_model_routing_escalates_critical(tmp_path):
+    from lens.batch import _rca_model_for
+    from lens.types import Severity
 
     cfg = _write_config(tmp_path)
-    cfg.rca.model = "claude-haiku-4-5-20251001"
+    cfg.rca.model = "sonnet"
+    cfg.rca.escalate_model = "opus"
+    cfg.rca.escalate_severity = Severity.CRITICAL
 
-    # No injected client + model set → ClaudeCodeClient pinned to the model.
-    client = _build_rca_client(cfg, None)
-    assert isinstance(client, ClaudeCodeClient)
-    assert client.extra_args == ["--model", "claude-haiku-4-5-20251001"]
+    # Bulk severities use the balanced model; CRITICAL escalates.
+    assert _rca_model_for(cfg, Severity.ERROR) == "sonnet"
+    assert _rca_model_for(cfg, Severity.WARNING) == "sonnet"
+    assert _rca_model_for(cfg, Severity.CRITICAL) == "opus"
 
-    # Injected client always wins (model ignored).
+    # Escalation disabled → everything on the bulk model.
+    cfg.rca.escalate_model = None
+    assert _rca_model_for(cfg, Severity.CRITICAL) == "sonnet"
+
+
+def test_client_for_model_builds_pinned_client_and_caches(tmp_path):
+    from lens.batch import _client_for_model
+    from lens.wiki.ingest import ClaudeCodeClient
+
+    cache: dict = {}
+    # No injected client + a model → ClaudeCodeClient pinned to it.
+    c1 = _client_for_model("sonnet", None, cache)
+    assert isinstance(c1, ClaudeCodeClient)
+    assert c1.extra_args == ["--model", "sonnet"]
+    # Cached: same model returns the same instance.
+    assert _client_for_model("sonnet", None, cache) is c1
+    # None model → session default (no pinned client).
+    assert _client_for_model(None, None, cache) is None
+    # Injected client always wins.
     stub = StubLLM()
-    assert _build_rca_client(cfg, stub) is stub
+    assert _client_for_model("sonnet", stub, cache) is stub
+
+
+def test_batch_reuses_prior_rca_for_ongoing_findings(tmp_path):
+    cfg = _write_config(tmp_path)  # reuse_prior_rca defaults True
+    stub1 = StubLLM()
+    first = run_batch(cfg, run_id="r1", llm_client=stub1)
+    assert first.rca_groups_investigated == 1
+    assert first.rca_groups_reused == 0
+    assert len(stub1.prompts) == 1
+
+    # Same data → same finding_id → second run reuses, no new LLM call.
+    stub2 = StubLLM()
+    second = run_batch(cfg, run_id="r2", llm_client=stub2)
+    assert second.rca_groups_investigated == 0
+    assert second.rca_groups_reused == 1
+    assert stub2.prompts == []  # zero LLM calls
+    # The reused hypothesis is still attached to the findings + persisted.
+    assert second.rcas
+    assert (cfg.output_dir / "rca" / "r2").exists()
+
+
+def test_batch_reuse_disabled_reinvestigates(tmp_path):
+    cfg = _write_config(tmp_path)
+    cfg.rca.reuse_prior_rca = False
+    run_batch(cfg, run_id="r1", llm_client=StubLLM())
+    stub2 = StubLLM()
+    second = run_batch(cfg, run_id="r2", llm_client=stub2)
+    assert second.rca_groups_investigated == 1
+    assert second.rca_groups_reused == 0
+    assert len(stub2.prompts) == 1
 
 
 def test_batch_rca_disabled(tmp_path):

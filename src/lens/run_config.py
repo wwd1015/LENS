@@ -34,8 +34,11 @@ Example::
       enabled: true
       severity_floor: error                   # groups at/above get one RCA each
       repo_root: .                            # git log root for producing paths
-      max_investigations: 10                  # cost cap: at most N LLM calls/run
-      model: claude-haiku-4-5-20251001        # cheaper model for RCA (optional)
+      reuse_prior_rca: true                   # skip re-investigating ongoing findings
+      max_investigations: 10                  # cost cap: at most N NEW LLM calls/run
+      model: sonnet                           # tier alias for the bulk (null = session default)
+      escalate_model: opus                    # stronger model for critical findings (null = off)
+      escalate_severity: critical             # severity at/above which to escalate
       sample_rows: 5                          # data rows per prompt (context size)
       max_commits: 5                          # commits per producing path
 
@@ -71,14 +74,29 @@ class RCAConfig:
     severity_floor: Severity = Severity.ERROR
     repo_root: Path = Path(".")
     # --- token / cost controls -----------------------------------------
-    # Cap on the number of Finding Groups investigated per run; the highest
-    # severity/confidence groups are kept. None = no cap (every group above
-    # the floor). Each investigation is one LLM call, so this bounds the
-    # worst-case cost on an incident day.
+    # Reuse a prior run's hypothesis for an ongoing finding instead of
+    # re-investigating it. A finding_id is keyed on (entity, field,
+    # snapshot_date) — a past snapshot is immutable, so last run's RCA still
+    # holds. This is the biggest steady-state saver (a daily cron mostly
+    # re-sees yesterday's findings). Set False to always re-investigate.
+    reuse_prior_rca: bool = True
+    # Cap on the number of NEW Finding Groups investigated per run (reused
+    # ones are free); the highest severity/confidence groups are kept. None =
+    # no cap. Each investigation is one LLM call, so this bounds worst case.
     max_investigations: int | None = None
-    # Model for RCA calls (passed to `claude -p --model`). Point at a cheaper
-    # model (e.g. a Haiku tier) to cut cost. None = Claude Code's default.
-    model: str | None = None
+    # Model for the bulk of RCA calls (passed to `claude -p --model`). Use a
+    # tier alias (``haiku`` / ``sonnet`` / ``opus`` / ``fable``), not a version
+    # — Claude Code resolves one model per tier. Defaults to ``sonnet``: RCA
+    # has to reason from data → lineage → commit into a calibrated hypothesis,
+    # so it balances effectiveness against cost rather than minimizing cost
+    # alone (Haiku is too weak here). ``None`` (YAML ``null``) uses Claude
+    # Code's session default.
+    model: str | None = "sonnet"
+    # Escalate findings at/above ``escalate_severity`` to a stronger model, so
+    # the worst issues get the most careful analysis. ``None`` disables
+    # escalation (everything uses ``model``).
+    escalate_model: str | None = "opus"
+    escalate_severity: Severity = Severity.CRITICAL
     # Context-size knobs — fewer sampled rows / commits = smaller prompts.
     sample_rows: int = 5
     max_commits: int = 5
@@ -240,14 +258,29 @@ def load_run_config(config_path: str | Path) -> RunConfig:
 
     rca_raw = cfg.get("rca") or {}
     max_inv = rca_raw.get("max_investigations")
+    # model / escalate_model: absent key → cost-optimized default; explicit
+    # null → session default (None); explicit value → that model.
+    if "model" in rca_raw:
+        rca_model = str(rca_raw["model"]) if rca_raw["model"] else None
+    else:
+        rca_model = "sonnet"
+    if "escalate_model" in rca_raw:
+        escalate_model = str(rca_raw["escalate_model"]) if rca_raw["escalate_model"] else None
+    else:
+        escalate_model = "opus"
     rca = RCAConfig(
         enabled=bool(rca_raw.get("enabled", True)),
         severity_floor=_parse_severity(
             rca_raw.get("severity_floor", "error"), context="rca.severity_floor"
         ),
         repo_root=_resolve_path(str(rca_raw.get("repo_root", ".")), base),
+        reuse_prior_rca=bool(rca_raw.get("reuse_prior_rca", True)),
         max_investigations=int(max_inv) if max_inv is not None else None,
-        model=str(rca_raw["model"]) if rca_raw.get("model") else None,
+        model=rca_model,
+        escalate_model=escalate_model,
+        escalate_severity=_parse_severity(
+            rca_raw.get("escalate_severity", "critical"), context="rca.escalate_severity"
+        ),
         sample_rows=int(rca_raw.get("sample_rows", 5)),
         max_commits=int(rca_raw.get("max_commits", 5)),
     )

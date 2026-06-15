@@ -56,4 +56,7 @@ Respond with a fenced JSON block (and only a JSON block) of this exact shape:
 
 `confidence` is a float in [0, 1]. `evidence` and `references` must be lists
 of plain strings. Do not emit any text outside the fenced JSON block.
+
+Be concise: keep `hypothesis` to 2-3 sentences and `evidence` to at most 4
+short bullets. Brevity keeps the response cheap and the brief readable.
 """

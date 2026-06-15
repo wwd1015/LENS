@@ -43,6 +43,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
         + (f" ({suppressed} suppressed by feedback)" if suppressed else "")
         + f"; RCA on {result.rca_groups_investigated} group(s)"
         + (
+            f", {result.rca_groups_reused} reused from prior run"
+            if result.rca_groups_reused
+            else ""
+        )
+        + (
             f", {result.rca_groups_skipped_below_floor} below severity floor"
             if result.rca_groups_skipped_below_floor
             else ""
