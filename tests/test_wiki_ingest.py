@@ -147,7 +147,10 @@ def test_is_safe_to_send_rejects_modern_credential_shapes(tmp_path):
         "openai.txt": "openai_token = sk-abcdefghij1234567890ABCDEFGHIJ",
         "github.txt": "ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         "slack.txt": "SLACK=xoxb-1234567890-1234567890-abcdef",
-        "jwt.txt": "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NSJ9.abc123signature",
+        "jwt.txt": (
+            "Authorization: Bearer "
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NSJ9.abc123signature"
+        ),
     }
     for fname, content in cases.items():
         p = tmp_path / fname
@@ -176,7 +179,7 @@ def test_assert_safe_to_send_noop_on_safe():
 _STUB_RESPONSE = """\
 ---
 name: senior-debt-equals-pool-x-rate
-description: Senior debt balance must equal sum of loan-pool balances multiplied by the deal-level advance rate
+description: Senior debt balance must equal sum of loan-pool balances x advance rate
 tables:
   - senior_debt
   - loan_pool

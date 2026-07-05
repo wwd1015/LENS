@@ -10,12 +10,11 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from lens.brief import render_brief
 from lens.types import Finding, Issue, RCAResult, Severity, compute_finding_id
-
 
 # ---------------------------------------------------------------------------
 # Test helpers

@@ -13,7 +13,6 @@ import pytest
 from lens.brief.markdown import main, render_brief_summary
 from lens.types import Finding, Issue, RCAResult, Severity, compute_finding_id
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

@@ -112,9 +112,11 @@ class SnowflakeSource(DataSource):
         if entity_id is not None:
             conditions.append(f"{self.entity_col} = {_quote_value(entity_id)}")
         if start_date is not None:
-            conditions.append(f"{self.snapshot_col} >= {_quote_date(start_date, what='start_date')}")
+            start = _quote_date(start_date, what="start_date")
+            conditions.append(f"{self.snapshot_col} >= {start}")
         if end_date is not None:
-            conditions.append(f"{self.snapshot_col} <= {_quote_date(end_date, what='end_date')}")
+            end = _quote_date(end_date, what="end_date")
+            conditions.append(f"{self.snapshot_col} <= {end}")
 
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         return f"SELECT * FROM ({self._base_query()}) t{where}"  # noqa: S608 - values quoted/validated

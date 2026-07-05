@@ -96,7 +96,10 @@ def _equation_matches(actual: dict, expected: dict) -> tuple[bool, str]:
     a_args = a_rhs.get("args") or []
     e_args = e_rhs.get("args") or []
     if sorted(map(str, a_args)) != sorted(map(str, e_args)):
-        return False, f"rhs.args mismatch (order-insensitive): actual={a_args!r} expected={e_args!r}"
+        return False, (
+            f"rhs.args mismatch (order-insensitive): "
+            f"actual={a_args!r} expected={e_args!r}"
+        )
 
     return True, "equation matches structurally"
 
