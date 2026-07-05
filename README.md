@@ -172,7 +172,7 @@ equation:
 
 ## LLM access
 
-All runtime LLM calls go through **Claude Code headless mode** — `ClaudeCodeClient` shells out to `claude -p "<prompt>" --output-format json`, reading the model's text plus Claude Code's per-call cost estimate (`total_cost_usd` + `usage`) from the JSON envelope. The `anthropic` Python SDK is **not** used; LENS environments authenticate via Claude Code SSO. Tests inject deterministic stubs through the `LLMClient` Protocol and never touch the network. Per-run LLM spend (an estimate, not authoritative billing) is rolled up onto `BatchResult.total_cost_usd` and shown on the brief / digest / CLI.
+All runtime LLM calls go through **Claude Code headless mode** — `ClaudeCodeClient` shells out to `claude -p --output-format json` with the prompt on stdin, reading the model's text plus Claude Code's per-call cost estimate (`total_cost_usd` + `usage`) from the JSON envelope. The `anthropic` Python SDK is **not** used; LENS environments authenticate via Claude Code SSO. Tests inject deterministic stubs through the `LLMClient` Protocol and never touch the network. Per-run LLM spend (an estimate, not authoritative billing) is rolled up onto `BatchResult.total_cost_usd` and shown on the brief / digest / CLI.
 
 ## Tests
 
@@ -226,7 +226,8 @@ promoted to the runtime:
   deferred until feedback volume makes it more than noise-fitting.
 - **LLM-judged ensemble for the TS detector pool.** The runtime uses a
   deterministic agreement boost instead: when ≥2 independent detector families
-  flag the same point, the deduped finding's confidence moves halfway toward
+  flag the same point in the same data (same source table, or via a
+  cross-source rule), the deduped finding's confidence moves halfway toward
   1.0 (`details["agreement_boost"]`). The LLM-judged vote ensemble lives in
   `tests/eval/test_ts_ensemble.py`; promoting it requires the eval to prove it
   beats the deterministic boost.
