@@ -206,8 +206,19 @@ def apply_feedback(
             continue
         if label != _FP_LABEL:
             continue
+        # An FP verdict with no parseable timestamp must not suppress: it
+        # could never expire, permanently muting the (entity, field) pair —
+        # exactly the failure the expiry exists to prevent (ADR 0001).
+        if ts is None:
+            logger.warning(
+                "feedback: false_positive verdict for (%s, %s) has a missing "
+                "or unparseable ts; ignoring it for suppression",
+                entity,
+                field,
+            )
+            continue
         # Expired FP verdicts neither suppress nor clear.
-        if ts is not None and ts < cutoff:
+        if ts < cutoff:
             continue
         families = {detector_family(d) for d in detectors} if detectors else {_WILDCARD}
         fp_families.setdefault(key, set()).update(families)

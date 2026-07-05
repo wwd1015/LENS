@@ -77,6 +77,24 @@ def test_expired_fp_verdict_does_not_suppress(tmp_path):
     assert out[0].issue.details["prior_feedback"]["label"] == "false_positive"
 
 
+def test_fp_verdict_without_ts_does_not_suppress(tmp_path, caplog):
+    """A verdict with no parseable ts could never expire — it must not
+    suppress (and must be called out at WARNING)."""
+    import logging
+
+    entry = _fp_entry()
+    entry["ts"] = None
+    fb = tmp_path / "feedback.jsonl"
+    _write_feedback(fb, [entry])
+
+    with caplog.at_level(logging.WARNING, logger="lens.feedback_loop"):
+        out = apply_feedback([_finding()], feedback_path=fb, expiry_days=90, now=NOW)
+
+    assert out[0].issue.severity is Severity.ERROR
+    assert not is_suppressed(out[0])
+    assert any("unparseable ts" in rec.message for rec in caplog.records)
+
+
 def test_new_detector_family_breaks_through(tmp_path):
     """A finding co-flagged by a family never judged FP must NOT be suppressed."""
     fb = tmp_path / "feedback.jsonl"

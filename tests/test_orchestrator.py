@@ -266,8 +266,8 @@ def test_dedup_merges_detectors(tmp_path):
 
 
 def test_scoring_applied(tmp_path):
-    # raw_score 0.9 ≥ 0.85 → tabpfn_anomaly ERROR.
-    orch = DetectionOrchestrator().add_single("scored_check", raw_score=0.9)
+    # raw_score 4.2 ≥ 4.0 → tabpfn_anomaly ERROR (z-score scale).
+    orch = DetectionOrchestrator().add_single("scored_check", raw_score=4.2)
     findings = orch.run(
         sources={"src": _sample_source_with_nulls()},
         wiki_root=None,

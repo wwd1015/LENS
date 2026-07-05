@@ -220,6 +220,53 @@ def test_batch_reuses_prior_rca_for_ongoing_findings(tmp_path):
     assert (cfg.output_dir / "rca" / "r2").exists()
 
 
+def test_batch_reuses_prior_rca_keyed_on_any_member(tmp_path):
+    """Representative churn must not defeat reuse: a prior RCA keyed by a
+    NON-representative member of the group still counts as ongoing."""
+    import json
+
+    cfg = _write_config(tmp_path)
+    first = run_batch(cfg, run_id="m1", llm_client=StubLLM())
+    assert first.rca_groups_investigated == 1
+
+    # The persisted RCA is keyed by the representative's finding_id. Re-key
+    # it to the OTHER group member to simulate the rep changing between runs.
+    member_ids = sorted(f.finding_id for f in first.findings)
+    rca_dir = cfg.output_dir / "rca" / "m1"
+    (old_file,) = rca_dir.glob("*.json")
+    payload = json.loads(old_file.read_text(encoding="utf-8"))
+    other_id = member_ids[0] if payload["finding_id"] != member_ids[0] else member_ids[1]
+    payload["finding_id"] = other_id
+    old_file.unlink()
+    (rca_dir / f"{other_id}.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    stub2 = StubLLM()
+    second = run_batch(cfg, run_id="m2", llm_client=stub2)
+    assert second.rca_groups_reused == 1
+    assert second.rca_groups_investigated == 0
+    assert stub2.prompts == []
+    # The reused result records where the hypothesis came from.
+    assert all(r.reused_from == other_id for r in second.rcas.values())
+
+
+def test_batch_cost_survives_save_failure(tmp_path, monkeypatch):
+    """The LLM call already happened — a failed persist must not erase the
+    spend from the run report (or drop the hypothesis from the brief)."""
+    from lens.rca.agent import RCAAgent
+
+    def _boom(self, rca, run_id):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(RCAAgent, "save", _boom)
+    cfg = _write_config(tmp_path)
+    result = run_batch(cfg, run_id="badsave", llm_client=CostStubLLM(cost_usd=0.02))
+
+    assert result.rca_groups_investigated == 1
+    assert result.total_cost_usd == pytest.approx(0.02)
+    assert result.rcas  # hypothesis still attached to the findings
+    assert result.brief_html_path.exists()
+
+
 def test_batch_reuse_disabled_reinvestigates(tmp_path):
     cfg = _write_config(tmp_path)
     cfg.rca.reuse_prior_rca = False

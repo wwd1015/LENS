@@ -9,7 +9,6 @@ import pytest
 from lens.scoring import DEFAULT_THRESHOLDS, score_to_severity
 from lens.types import Severity
 
-
 # -----------------------------------------------------------------------------
 # Per-detector severity bucketing.
 #
@@ -20,10 +19,23 @@ from lens.types import Severity
 
 _DETECTOR_CASES = [
     # (detector, below_warn, warn_threshold, err_threshold, crit_threshold)
-    ("tabpfn_anomaly", 0.50, 0.70, 0.85, 0.95),
+    # tabpfn_anomaly is z-score scale, matching what the detector emits
+    # ((observed − mean) / std, flagged at |z| > 3) — NOT a probability.
+    ("tabpfn_anomaly", 1.5, 3.0, 4.0, 5.0),
     ("stl_residual", 1.5, 3.0, 4.0, 5.0),
     ("cross_source_wiki", 0.005, 0.01, 0.05, 0.10),
 ]
+
+
+def test_tabpfn_thresholds_are_z_scale() -> None:
+    """A freshly-flagged TabPFN anomaly (|z| just over 3) must be WARNING,
+    not CRITICAL — the regression here was a probability-scale row that made
+    every emitted anomaly CRITICAL with confidence ≈ 1.0."""
+    sev, conf = score_to_severity(3.2, "tabpfn_anomaly")
+    assert sev is Severity.WARNING
+    assert conf < 0.9
+    sev, _ = score_to_severity(5.5, "tabpfn_anomaly")
+    assert sev is Severity.CRITICAL
 
 
 @pytest.mark.parametrize(

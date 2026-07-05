@@ -33,6 +33,7 @@ real prefix caching would require the Anthropic SDK, which ADR 0002 rejects.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -181,15 +182,24 @@ def run_batch(
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
     prior_findings = _prior_findings_target(cfg.output_dir)
 
-    # Materialize sources once; the same LazyFrames feed detection and RCA
-    # row sampling.
-    lazy_sources: dict[str, pl.LazyFrame] = {
-        name: _materialize_source(src) for name, src in cfg.sources.items()
-    }
+    # Materialize sources for RCA row sampling. Best-effort: a source that
+    # cannot be read is logged and skipped here — the orchestrator (which
+    # materializes independently from cfg.sources) turns the same failure
+    # into a CRITICAL source_unavailable finding, so it is never silent.
+    lazy_sources: dict[str, pl.LazyFrame] = {}
+    for name, src in cfg.sources.items():
+        try:
+            lazy_sources[name] = _materialize_source(src)
+        except Exception as exc:  # noqa: BLE001 - orchestrator flags it
+            logger.exception(
+                "batch: failed to materialize source %r for RCA sampling: %s",
+                name,
+                exc,
+            )
 
     orch = _build_orchestrator(cfg)
     findings = orch.run(
-        sources=dict(lazy_sources),
+        sources=dict(cfg.sources),
         wiki_root=cfg.wiki_root,
         output_dir=cfg.output_dir,
         run_id=run_id,
@@ -256,9 +266,18 @@ def run_batch(
         )
 
         # Reuse first (free), so the investigation cap only bounds NEW calls.
+        # Match on ANY member's finding_id, not just the representative's —
+        # the rep churns when a new entity joins the group with higher
+        # severity, and that must not force a re-investigation of the same
+        # ongoing incident.
         fresh: list[tuple[tuple[str, str], list[Finding], Finding]] = []
         for key, members, rep in eligible:
-            reused = prior_rcas.get(rep.finding_id)
+            reused: RCAResult | None = None
+            for member in members:
+                prior = prior_rcas.get(member.finding_id)
+                if prior is not None:
+                    reused = dataclasses.replace(prior, reused_from=prior.finding_id)
+                    break
             if reused is not None:
                 _agent_for(cfg.rca.model).save(reused, actual_run_id)
                 for member in members:
@@ -286,14 +305,14 @@ def run_batch(
                     sample_rows=cfg.rca.sample_rows,
                     max_commits=cfg.rca.max_commits,
                 )
-                rca.model = model_used
-                agent.save(rca, actual_run_id)
             except Exception as exc:  # noqa: BLE001 - one bad group must not kill the brief
                 logger.exception("batch: RCA failed for group %s: %s", key, exc)
                 continue
+            rca.model = model_used
             result.rca_groups_investigated += 1
             # Accumulate this run's NEW spend (reused groups are not counted —
-            # they cost nothing this run).
+            # they cost nothing this run) BEFORE persistence: the LLM call
+            # already happened, so a failed save must not erase the spend.
             result.total_cost_usd += rca.cost_usd or 0.0
             result.total_input_tokens += rca.input_tokens or 0
             result.total_output_tokens += rca.output_tokens or 0
@@ -301,6 +320,12 @@ def run_batch(
             # each brief card can render it.
             for member in members:
                 result.rcas[member.finding_id] = rca
+            try:
+                agent.save(rca, actual_run_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "batch: failed to persist RCA for group %s: %s", key, exc
+                )
 
     # --- brief ------------------------------------------------------------
     brief_path = cfg.output_dir / f"brief.{actual_run_id}.html"

@@ -295,6 +295,7 @@ def _load_rcas(rca_dir: Path) -> dict[str, RCAResult]:
                 return None
 
         model = payload.get("model")
+        reused_from = payload.get("reused_from")
         rcas[finding_id] = RCAResult(
             finding_id=finding_id,
             hypothesis=payload.get("hypothesis", ""),
@@ -305,6 +306,7 @@ def _load_rcas(rca_dir: Path) -> dict[str, RCAResult]:
             input_tokens=_opt_int(payload.get("input_tokens")),
             output_tokens=_opt_int(payload.get("output_tokens")),
             model=str(model) if model is not None else None,
+            reused_from=str(reused_from) if reused_from is not None else None,
         )
     return rcas
 
