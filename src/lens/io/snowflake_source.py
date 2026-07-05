@@ -10,15 +10,17 @@ import polars as pl
 
 from lens.io.base import DataSource
 
-# Plain (optionally dotted / $-suffixed) SQL identifiers only. Anything else
-# — quoted identifiers, spaces, punctuation — is rejected rather than risk
+# Plain (optionally dotted / $-suffixed) SQL identifiers, or a
+# double-quoted identifier with no embedded quotes (Snowflake's escape for
+# mixed case / spaces). Anything else is rejected rather than risk
 # interpolating attacker-shaped text into a query.
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.$]*$")
+_QUOTED_IDENTIFIER_RE = re.compile(r'^"[^"]+"$')
 
 
 def _validate_identifier(name: str, *, what: str) -> str:
-    """Return ``name`` if it is a plain SQL identifier, else raise ValueError."""
-    if not _IDENTIFIER_RE.match(name or ""):
+    """Return ``name`` if it is a plain or quoted SQL identifier, else raise."""
+    if not (_IDENTIFIER_RE.match(name or "") or _QUOTED_IDENTIFIER_RE.match(name or "")):
         raise ValueError(f"{what} {name!r} is not a plain SQL identifier")
     return name
 

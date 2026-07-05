@@ -37,8 +37,8 @@ class BaseCheck(ABC):
             # YAML typo (`z_treshold: 2.5`) — which would otherwise silently
             # run the check with its default tuning.
             logger.warning(
-                "check %r ignoring unknown parameter(s): %s — check the "
-                "config for typos",
+                "detector %r ignoring unknown parameter(s): %s — likely a "
+                "typo in the config",
                 self.name,
                 sorted(params),
             )

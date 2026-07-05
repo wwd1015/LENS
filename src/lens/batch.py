@@ -144,13 +144,28 @@ def _prior_run_id(prior_findings: Path | None) -> str | None:
 
 
 def _group_for_rca(findings: list[Finding]) -> dict[tuple[str, str], list[Finding]]:
-    """Bucket non-suppressed findings into Finding Groups (ADR 0003)."""
+    """Bucket non-suppressed findings into Finding Groups (ADR 0003).
+
+    ``source_unavailable`` findings are excluded: an infra outage needs no
+    LLM investigation (the description IS the diagnosis), and as CRITICAL /
+    confidence-1.0 findings they would otherwise sort first and consume the
+    capped investigation slots ahead of real data findings.
+    """
     groups: dict[tuple[str, str], list[Finding]] = {}
     for f in findings:
         if is_suppressed(f):
             continue
+        if f.issue.check_name == "source_unavailable":
+            continue
         groups.setdefault(finding_group_key(f), []).append(f)
     return groups
+
+
+def _is_failed_rca(rca: RCAResult) -> bool:
+    """True for the failure marker :meth:`RCAAgent.investigate` returns when
+    the LLM call itself raised — confidence 0 and an error-prefixed
+    hypothesis. Never worth reusing across runs."""
+    return rca.confidence == 0.0 and rca.hypothesis.startswith("LLM call failed")
 
 
 def _group_representative(members: list[Finding]) -> Finding:
@@ -188,10 +203,11 @@ def run_batch(
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
     prior_findings = _prior_findings_target(cfg.output_dir)
 
-    # Materialize sources for RCA row sampling. Best-effort: a source that
-    # cannot be read is logged and skipped here — the orchestrator (which
-    # materializes independently from cfg.sources) turns the same failure
-    # into a CRITICAL source_unavailable finding, so it is never silent.
+    # Materialize sources ONCE; the same handles feed both detection and RCA
+    # row sampling (a Snowflake source downloads a single time per run). A
+    # source that fails here is passed through raw so the orchestrator's own
+    # attempt turns the failure into a CRITICAL source_unavailable finding —
+    # never a silent skip.
     lazy_sources: dict[str, pl.LazyFrame] = {}
     for name, src in cfg.sources.items():
         try:
@@ -202,10 +218,11 @@ def run_batch(
                 name,
                 exc,
             )
+    orch_sources: dict = {name: lazy_sources.get(name, src) for name, src in cfg.sources.items()}
 
     orch = _build_orchestrator(cfg)
     findings = orch.run(
-        sources=dict(cfg.sources),
+        sources=orch_sources,
         wiki_root=cfg.wiki_root,
         output_dir=cfg.output_dir,
         run_id=run_id,
@@ -281,6 +298,12 @@ def run_batch(
             reused: RCAResult | None = None
             for member in members:
                 prior = prior_rcas.get(member.finding_id)
+                if prior is not None and _is_failed_rca(prior):
+                    # A persisted "LLM call failed" marker (auth expiry, rate
+                    # limit during a prior run) is not a hypothesis — reusing
+                    # it would render the error banner as the root cause
+                    # forever. Re-investigate instead.
+                    continue
                 if prior is not None:
                     reused = dataclasses.replace(prior, reused_from=prior.finding_id)
                     break

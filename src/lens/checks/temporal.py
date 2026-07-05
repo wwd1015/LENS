@@ -34,19 +34,24 @@ class StaleDataCheck(BaseCheck):
         # The canonical stale-feed failure is TRAILING staleness: an entity
         # that updated normally and then froze. Per entity (sorted by
         # snapshot), count the run of trailing snapshots equal to the latest
-        # value — matching value-vs-last, reversing, and cum_min-ing the
-        # boolean gives 1s for the trailing unchanged run and 0s after the
-        # first change. null == null counts as unchanged (a frozen null feed
-        # is still frozen).
+        # value — eq_missing gives null == null semantics (a frozen null feed
+        # is still frozen); reversing and cum_min-ing the boolean gives 1s
+        # for the trailing unchanged run and 0s after the first change.
         value = pl.col(self.field)
-        unchanged_vs_last = (value == value.last()) | (value.is_null() & value.last().is_null())
-        trailing_run = unchanged_vs_last.cast(pl.Int32).reverse().cum_min().sum()
+        trailing = value.eq_missing(value.last()).cast(pl.Int32).reverse().cum_min()
+        trailing_run = trailing.sum()
 
         df = (
             data.sort(snapshot_col)
             .group_by(entity_col)
             .agg(
                 trailing_run.alias("trailing_unchanged"),
+                # The snapshot where the freeze began. Stamped as the Issue's
+                # snapshot_date because it is STABLE while the freeze
+                # persists — the last snapshot advances every run, which
+                # would churn the finding_id daily and defeat RCA reuse and
+                # the brief's new/resolved delta for an ongoing incident.
+                pl.col(snapshot_col).gather(pl.len() - trailing_run).first().alias("freeze_start"),
                 pl.col(snapshot_col).last().alias("last_snapshot"),
             )
             .filter(pl.col("trailing_unchanged") > self.max_unchanged)
@@ -59,12 +64,16 @@ class StaleDataCheck(BaseCheck):
                 severity=self.severity,
                 entity_id=str(row[entity_col]),
                 field_name=self.field,
-                snapshot_date=row["last_snapshot"],
+                snapshot_date=row["freeze_start"],
                 description=(
                     f"Field '{self.field}' unchanged across the last "
-                    f"{row['trailing_unchanged']} snapshots"
+                    f"{row['trailing_unchanged']} snapshots (frozen since "
+                    f"{row['freeze_start']})"
                 ),
-                details={"trailing_unchanged": row["trailing_unchanged"]},
+                details={
+                    "trailing_unchanged": row["trailing_unchanged"],
+                    "last_snapshot": str(row["last_snapshot"]),
+                },
             )
             for row in df.iter_rows(named=True)
         ]

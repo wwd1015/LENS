@@ -411,7 +411,7 @@ class DetectionOrchestrator:
                         field_name=name,
                         snapshot_date=None,
                         description=(
-                            f"source {name!r} could not be read; every check "
+                            f"source {name!r} could not be read; every detector "
                             f"scoped to it was skipped this run: {exc}"
                         ),
                         confidence=1.0,

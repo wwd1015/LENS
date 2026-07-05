@@ -32,7 +32,7 @@ class CheckRegistry:
             # silent overwrite (e.g. a forgotten `name` attribute falling
             # back to the class name) should at least leave a trace.
             logger.warning(
-                "check registry: name %r re-registered by %s (was %s)",
+                "detector registry: name %r re-registered by %s (was %s)",
                 name,
                 cls.__qualname__,
                 existing.__qualname__,

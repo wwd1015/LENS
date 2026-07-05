@@ -60,12 +60,15 @@ def test_parse_claude_json_extracts_text_and_cost():
     assert cost.cache_read_input_tokens == 100
 
 
-def test_parse_claude_json_non_json_degrades_to_text_zero_cost():
-    """Plain-text stdout (older CLI / error banner) → passthrough, zero cost."""
+def test_parse_claude_json_non_json_degrades_to_text_unknown_cost():
+    """Plain-text stdout (older CLI) → passthrough, cost UNKNOWN (None).
+
+    None, not 0.0: a call that plainly happened but reported no estimate
+    must flip BatchResult.cost_known so the brief shows n/a, never $0.00."""
     text, cost = _parse_claude_json("just some plain text, not json")
     assert text == "just some plain text, not json"
     assert cost == CallCost()
-    assert cost.cost_usd == 0.0
+    assert cost.cost_usd is None
 
 
 def test_parse_claude_json_missing_usage_keeps_cost():

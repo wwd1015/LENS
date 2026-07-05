@@ -113,7 +113,7 @@ lens-wiki/
 Every page is YAML frontmatter (fenced by `---`) followed by a markdown body. `src/lens/wiki/reader.py` parses pages into `RulePage`, `DatasetPage`, or `LineagePage` based on the parent directory. Malformed pages are logged and skipped, never raised.
 
 Update modes:
-- **Auto-extracted** — `src/lens/wiki/ingest.py` reads `(dataset, code_path)` and asks the LLM (via the headless-mode pattern below) to draft the page. Incremental — re-runs only touch pages whose source changed. Page ownership is tracked in `rules/.provenance.json`: a page may only be overwritten by a re-ingest of the same source paths (a hostile comment in an ingested file can't name its output after another rule and replace it).
+- **Auto-extracted** — `src/lens/wiki/ingest.py` reads `(dataset, code_path)` and asks the LLM (via the headless-mode pattern below) to draft the page. Incremental — re-runs only touch pages whose source changed. Page ownership is tracked in `rules/.provenance.json`: once a page has been ingested, only a re-ingest of the same source paths may overwrite it (a hostile comment in an ingested file can't hijack another ingested rule's page). Pages that predate the sidecar — including hand-authored ones — are adopted and locked by the first ingest that produces their slug; git review of wiki diffs is the backstop for that first write.
 - **Hand-authored** — analysts hand-write or edit pages directly. The reader treats both modes identically.
 
 ### Orchestrator

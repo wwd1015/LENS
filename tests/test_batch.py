@@ -448,3 +448,62 @@ def test_cost_known_with_reporting_client(tmp_path):
     result = run_batch(cfg, run_id="knowncost", llm_client=CostStubLLM(cost_usd=0.02))
     assert result.cost_known is True
     assert "n/a" not in result.markdown_digest
+
+
+def test_source_unavailable_findings_never_trigger_rca(tmp_path):
+    """An infra outage needs no LLM investigation and must not consume the
+    capped RCA slots."""
+    cfg = _write_config(tmp_path)
+    cfg.sources["dead"] = "/nonexistent/nowhere.csv"
+    stub = StubLLM()
+    result = run_batch(cfg, run_id="deadsrc", llm_client=stub)
+
+    unavailable = [
+        f for f in result.findings if f.issue.check_name == "source_unavailable"
+    ]
+    assert len(unavailable) == 1
+    # Only the real (null_check) group is investigated.
+    assert result.rca_groups_investigated == 1
+    assert unavailable[0].finding_id not in result.rcas
+
+
+def test_failed_rca_is_not_reused_next_run(tmp_path):
+    """A persisted 'LLM call failed' marker (auth expiry) must be
+    re-investigated on the next run, not rendered as the root cause forever."""
+
+    class ExplodingLLM:
+        def complete(self, prompt: str) -> str:
+            raise RuntimeError("Invalid API key")
+
+    cfg = _write_config(tmp_path)
+    first = run_batch(cfg, run_id="authfail", llm_client=ExplodingLLM())
+    assert all(r.confidence == 0.0 for r in first.rcas.values())
+
+    # Auth fixed → second run must NOT reuse the failure marker.
+    stub = StubLLM()
+    second = run_batch(cfg, run_id="recovered", llm_client=stub)
+    assert second.rca_groups_reused == 0
+    assert second.rca_groups_investigated == 1
+    assert len(stub.prompts) == 1
+    assert all("LLM call failed" not in r.hypothesis for r in second.rcas.values())
+
+
+def test_unparseable_cli_envelope_flips_cost_known(tmp_path):
+    """A client whose last_call carries cost_usd=None (unparseable envelope)
+    must mark the run cost unknown."""
+
+    class NoCostEnvelopeLLM:
+        def __init__(self):
+            self.last_call = None
+            self.prompts = []
+
+        def complete(self, prompt: str) -> str:
+            self.prompts.append(prompt)
+            self.last_call = CallCost()  # degraded parse: cost_usd=None
+            return RCA_RESPONSE
+
+    cfg = _write_config(tmp_path)
+    result = run_batch(cfg, run_id="degraded", llm_client=NoCostEnvelopeLLM())
+    assert result.rca_groups_investigated == 1
+    assert result.cost_known is False
+    assert "Estimated LLM cost this run: n/a" in result.markdown_digest

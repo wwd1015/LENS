@@ -24,6 +24,7 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from lens.brief.feedback import append_feedback
 
@@ -49,22 +50,24 @@ class BriefServer(ThreadingHTTPServer):
         self.feedback_path = Path(feedback_path)
 
 
-# Origin hosts allowed to POST feedback. The server is a loopback tool; a
-# same-machine browser tab is the only legitimate caller. Anything else —
+# Origin hosts always allowed to POST feedback (a same-machine browser tab).
+# A non-loopback Origin is additionally accepted when its host:port equals
+# the request's Host header — the page came from THIS server (e.g. `lens
+# serve --host 0.0.0.0` reached as http://lens-box:8377). Anything else —
 # notably a hostile web page POSTing at http://127.0.0.1:8377 from the
 # analyst's browser — must not be able to forge suppression votes.
 _ALLOWED_ORIGIN_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
 
 
-def _origin_host(origin: str) -> str | None:
-    """Extract the host part of an Origin header value (no ports)."""
-    from urllib.parse import urlsplit
-
+def _origin_allowed(origin: str, host_header: str | None) -> bool:
+    """True when the Origin header is loopback or same-origin with the request."""
     try:
-        host = urlsplit(origin).hostname
+        parts = urlsplit(origin)
     except ValueError:
-        return None
-    return host
+        return False
+    if parts.hostname in _ALLOWED_ORIGIN_HOSTS:
+        return True
+    return bool(host_header) and parts.netloc.lower() == host_header.strip().lower()
 
 
 class _BriefHandler(BaseHTTPRequestHandler):
@@ -130,7 +133,7 @@ class _BriefHandler(BaseHTTPRequestHandler):
             self._send_json(415, {"error": "Content-Type must be application/json"})
             return
         origin = self.headers.get("Origin")
-        if origin and _origin_host(origin) not in _ALLOWED_ORIGIN_HOSTS:
+        if origin and not _origin_allowed(origin, self.headers.get("Host")):
             self._send_json(403, {"error": "cross-origin feedback is not accepted"})
             return
 

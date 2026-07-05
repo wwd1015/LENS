@@ -122,8 +122,11 @@ def test_stale_data_trailing_freeze_flagged():
     assert len(result.issues) == 1
     issue = result.issues[0]
     assert issue.entity_id == "L1"
-    assert issue.snapshot_date == date(2024, 1, 6)  # dated at the last snapshot
+    # Dated at the FREEZE START (stable across runs → stable finding_id for
+    # an ongoing freeze), not the ever-advancing last snapshot.
+    assert issue.snapshot_date == date(2024, 1, 3)
     assert issue.details["trailing_unchanged"] == 4
+    assert issue.details["last_snapshot"] == "2024-01-06"
 
 
 def test_stale_data_recently_changing_not_flagged():

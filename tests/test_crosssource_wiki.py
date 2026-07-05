@@ -579,3 +579,75 @@ def test_check_null_mismatch_issue_shape():
     assert issue.details["score"] == 1.0
     assert issue.details["lhs"] is None
     assert "missing" in issue.description
+
+
+def test_null_operand_in_term_breakdown_does_not_kill_check():
+    """A null rhs operand value must not TypeError out of run_cross — the
+    null-mismatch violation itself has to survive."""
+
+    class _Rule:
+        name = "null_operand_rule"
+        equation = {
+            "lhs": {"table": "a", "field": "v", "agg": None, "group_by": None},
+            "rhs": {"table": "b", "field": "v", "agg": None, "group_by": None},
+            "tolerance": 1.0,
+            "tolerance_type": "absolute",
+        }
+
+    class _FakeWiki:
+        def all_rules(self):
+            return [_Rule()]
+
+    snap = date(2026, 1, 1)
+    sources = {
+        "a": pl.LazyFrame({"deal_id": ["x"], "snapshot_date": [snap], "v": [100.0]}),
+        "b": pl.LazyFrame(
+            {"deal_id": ["x"], "snapshot_date": [snap], "v": [None]},
+            schema={"deal_id": pl.Utf8, "snapshot_date": pl.Date, "v": pl.Float64},
+        ),
+    }
+    result = CrossSourceWikiCheck().run_cross(
+        sources, wiki=_FakeWiki(), entity_col="deal_id", snapshot_col="snapshot_date"
+    )
+    assert len(result.issues) == 1
+    assert result.issues[0].details["null_mismatch"] is True
+
+
+def test_null_mismatch_flood_collapses_to_coverage_gap():
+    """A snapshot missing from one table must yield ONE coverage-gap Issue,
+    not one CRITICAL per entity."""
+    from lens.checks.crosssource_wiki import _NULL_MISMATCH_CAP
+
+    class _Rule:
+        name = "flood_rule"
+        equation = {
+            "lhs": {"table": "a", "field": "v", "agg": None, "group_by": None},
+            "rhs": {"table": "b", "field": "v", "agg": None, "group_by": None},
+            "tolerance": 1.0,
+            "tolerance_type": "absolute",
+        }
+
+    class _FakeWiki:
+        def all_rules(self):
+            return [_Rule()]
+
+    n = _NULL_MISMATCH_CAP + 25
+    snap = date(2026, 1, 1)
+    entities = [f"e{i}" for i in range(n)]
+    sources = {
+        "a": pl.LazyFrame({"deal_id": entities, "snapshot_date": [snap] * n, "v": [1.0] * n}),
+        # b is missing the whole snapshot → every entity is one-sided.
+        "b": pl.LazyFrame(
+            {"deal_id": [], "snapshot_date": [], "v": []},
+            schema={"deal_id": pl.Utf8, "snapshot_date": pl.Date, "v": pl.Float64},
+        ),
+    }
+    result = CrossSourceWikiCheck().run_cross(
+        sources, wiki=_FakeWiki(), entity_col="deal_id", snapshot_col="snapshot_date"
+    )
+    assert len(result.issues) == 1
+    issue = result.issues[0]
+    assert issue.details["coverage_gap"] is True
+    assert issue.details["null_mismatch_count"] == n
+    assert len(issue.details["sample_entities"]) == 10
+    assert issue.entity_id is None
