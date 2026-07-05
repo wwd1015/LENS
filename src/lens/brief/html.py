@@ -559,8 +559,14 @@ def render_brief(
     # Run-cost readout — only when the run actually did (or reused) RCA work.
     cost_view: dict[str, Any] | None = None
     if cost_summary and (cost_summary.get("investigated") or cost_summary.get("reused")):
+        # cost_known=False means the client reported no estimate for at least
+        # one investigation — render "n/a", never a misleading "$0.00".
         cost_view = {
-            "total_usd": _fmt_usd(cost_summary.get("total_cost_usd") or 0.0),
+            "total_usd": (
+                _fmt_usd(cost_summary.get("total_cost_usd") or 0.0)
+                if cost_summary.get("cost_known", True)
+                else "n/a"
+            ),
             "input_tokens": f"{int(cost_summary.get('input_tokens') or 0):,}",
             "output_tokens": f"{int(cost_summary.get('output_tokens') or 0):,}",
             "investigated": int(cost_summary.get("investigated") or 0),

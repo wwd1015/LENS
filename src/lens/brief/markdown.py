@@ -131,8 +131,13 @@ def _format_cost_footer(cost_summary: dict[str, Any] | None) -> str | None:
     reused = int(cost_summary.get("reused") or 0)
     if not (investigated or reused):
         return None
-    total = float(cost_summary.get("total_cost_usd") or 0.0)
-    usd = f"${total:,.2f}" if total >= 1 else f"${total:.4f}"
+    if cost_summary.get("cost_known", True):
+        total = float(cost_summary.get("total_cost_usd") or 0.0)
+        usd = f"${total:,.2f}" if total >= 1 else f"${total:.4f}"
+    else:
+        # At least one investigation carried no cost estimate — the total is
+        # unknown, not $0.
+        usd = "n/a"
     detail = f"{investigated} investigated"
     if reused:
         detail += f", {reused} reused free"

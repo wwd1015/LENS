@@ -73,12 +73,18 @@ class BatchResult:
     total_cost_usd: float = 0.0
     total_input_tokens: int = 0
     total_output_tokens: int = 0
+    # False when at least one fresh investigation reported no cost estimate
+    # (non-Claude client, or the CLI envelope didn't parse) — the brief then
+    # shows "n/a" instead of a misleading "$0.00". Zero fresh investigations
+    # is genuinely $0 of new spend, so the flag stays True.
+    cost_known: bool = True
 
     @property
-    def cost_summary(self) -> dict[str, float | int]:
+    def cost_summary(self) -> dict[str, float | int | bool]:
         """Compact run-cost dict for the brief / digest / CLI summary."""
         return {
             "total_cost_usd": self.total_cost_usd,
+            "cost_known": self.cost_known,
             "input_tokens": self.total_input_tokens,
             "output_tokens": self.total_output_tokens,
             "investigated": self.rca_groups_investigated,
@@ -313,7 +319,12 @@ def run_batch(
             # Accumulate this run's NEW spend (reused groups are not counted —
             # they cost nothing this run) BEFORE persistence: the LLM call
             # already happened, so a failed save must not erase the spend.
-            result.total_cost_usd += rca.cost_usd or 0.0
+            # A None cost means the client reported no estimate — that makes
+            # the run total unknown, not $0.
+            if rca.cost_usd is None:
+                result.cost_known = False
+            else:
+                result.total_cost_usd += rca.cost_usd
             result.total_input_tokens += rca.input_tokens or 0
             result.total_output_tokens += rca.output_tokens or 0
             # The group shares one hypothesis — attach it to every member so
