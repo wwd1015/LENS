@@ -31,15 +31,25 @@ class StaleDataCheck(BaseCheck):
         entity_col: str = "entity_id",
         snapshot_col: str = "snapshot_date",
     ) -> CheckResult:
+        # The canonical stale-feed failure is TRAILING staleness: an entity
+        # that updated normally and then froze. Per entity (sorted by
+        # snapshot), count the run of trailing snapshots equal to the latest
+        # value — matching value-vs-last, reversing, and cum_min-ing the
+        # boolean gives 1s for the trailing unchanged run and 0s after the
+        # first change. null == null counts as unchanged (a frozen null feed
+        # is still frozen).
+        value = pl.col(self.field)
+        unchanged_vs_last = (value == value.last()) | (value.is_null() & value.last().is_null())
+        trailing_run = unchanged_vs_last.cast(pl.Int32).reverse().cum_min().sum()
+
         df = (
             data.sort(snapshot_col)
             .group_by(entity_col)
             .agg(
-                pl.col(self.field).n_unique().alias("n_unique"),
-                pl.col(snapshot_col).count().alias("n_snapshots"),
+                trailing_run.alias("trailing_unchanged"),
                 pl.col(snapshot_col).last().alias("last_snapshot"),
             )
-            .filter((pl.col("n_unique") == 1) & (pl.col("n_snapshots") > self.max_unchanged))
+            .filter(pl.col("trailing_unchanged") > self.max_unchanged)
             .collect()
         )
 
@@ -49,9 +59,12 @@ class StaleDataCheck(BaseCheck):
                 severity=self.severity,
                 entity_id=str(row[entity_col]),
                 field_name=self.field,
+                snapshot_date=row["last_snapshot"],
                 description=(
-                    f"Field '{self.field}' unchanged across {row['n_snapshots']} snapshots"
+                    f"Field '{self.field}' unchanged across the last "
+                    f"{row['trailing_unchanged']} snapshots"
                 ),
+                details={"trailing_unchanged": row["trailing_unchanged"]},
             )
             for row in df.iter_rows(named=True)
         ]
@@ -155,7 +168,12 @@ class VolatilityCheck(BaseCheck):
                 .abs()
                 .alias(change_col)
             )
-            violations = df.filter(pl.col(change_col) > self.max_pct_change)
+            # prev == 0 makes the relative change infinite — a field that
+            # legitimately starts at zero (new originations, drawdowns) would
+            # spam "changed by inf%" findings. Skip those transitions.
+            violations = df.filter(
+                (pl.col(change_col) > self.max_pct_change) & (pl.col(prev_col) != 0)
+            )
 
         vdf = violations.select(entity_col, snapshot_col, self.field, change_col).collect()
 
@@ -168,8 +186,11 @@ class VolatilityCheck(BaseCheck):
                 snapshot_date=row[snapshot_col],
                 description=(
                     f"Volatility spike: '{self.field}' changed by "
-                    f"{'$' if self.absolute else ''}{row[change_col]:.4f}"
-                    f"{'%' if not self.absolute else ''}"
+                    + (
+                        f"${row[change_col]:.4f}"
+                        if self.absolute
+                        else f"{row[change_col] * 100.0:.2f}%"
+                    )
                 ),
             )
             for row in vdf.iter_rows(named=True)

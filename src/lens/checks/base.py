@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
 import polars as pl
 
 from lens.types import CheckResult, Severity
+
+logger = logging.getLogger(__name__)
 
 
 class BaseCheck(ABC):
@@ -28,6 +31,17 @@ class BaseCheck(ABC):
         self.params = params
         if not self.name:
             self.name = self.__class__.__name__
+        if params:
+            # Every built-in check declares its real knobs as named
+            # constructor args, so anything left over is almost certainly a
+            # YAML typo (`z_treshold: 2.5`) — which would otherwise silently
+            # run the check with its default tuning.
+            logger.warning(
+                "check %r ignoring unknown parameter(s): %s — check the "
+                "config for typos",
+                self.name,
+                sorted(params),
+            )
 
     @abstractmethod
     def run(

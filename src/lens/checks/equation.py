@@ -219,7 +219,12 @@ def evaluate_equation(
 
     Output columns: ``[entity_col, snapshot_col, "__lhs__", "__rhs__", "__diff__"]``.
     A row is included iff ``__diff__ > eq["tolerance"]`` per the configured
-    ``tolerance_type``.
+    ``tolerance_type``, OR exactly one side is null — a null balance (or an
+    entity present in only one table; the lhs/rhs frames are full-joined) is
+    a reconciliation break, not a pass. Rows where BOTH sides are null are
+    not violations. Note: within a nested compound node, operand frames are
+    still inner-joined — the null-coverage guarantee applies to the top-level
+    lhs-vs-rhs comparison.
     """
     required = {"lhs", "rhs", "tolerance", "tolerance_type"}
     missing = required - set(eq or {})
@@ -227,6 +232,8 @@ def evaluate_equation(
         raise ValueError(f"Equation spec is missing required keys: {sorted(missing)}")
 
     tolerance = eq["tolerance"]
+    if isinstance(tolerance, bool) or not isinstance(tolerance, (int, float)):
+        raise ValueError(f"tolerance must be a number, got {tolerance!r}")
     tol_type = eq["tolerance_type"]
     if tol_type not in ("absolute", "relative"):
         raise ValueError(f"tolerance_type must be 'absolute' or 'relative', got {tol_type!r}")
@@ -238,7 +245,7 @@ def evaluate_equation(
         {"__value__": "__rhs__"}
     )
 
-    joined = lhs_lf.join(rhs_lf, on=[entity_col, snapshot_col], how="inner")
+    joined = lhs_lf.join(rhs_lf, on=[entity_col, snapshot_col], how="full", coalesce=True)
 
     lhs_e = pl.col("__lhs__").cast(pl.Float64)
     rhs_e = pl.col("__rhs__").cast(pl.Float64)
@@ -256,5 +263,8 @@ def evaluate_equation(
         )
 
     with_diff = joined.with_columns(diff_expr.alias("__diff__"))
-    violations = with_diff.filter(pl.col("__diff__") > tolerance)
+    # A null diff (null on either side) would silently drop out of the
+    # numeric comparison — surface one-sided nulls as violations instead.
+    null_mismatch = pl.col("__lhs__").is_null() != pl.col("__rhs__").is_null()
+    violations = with_diff.filter((pl.col("__diff__") > tolerance) | null_mismatch)
     return violations.select(entity_col, snapshot_col, "__lhs__", "__rhs__", "__diff__")

@@ -7,17 +7,13 @@ import polars as pl
 from lens.checks.crosssource import CrossSourceMatchCheck
 from lens.checks.snapshot import NullCheck, RangeCheck
 from lens.checks.temporal import MonotonicityCheck, StaleDataCheck, VolatilityCheck
-from lens.types import Severity
 
 
 def _make_data() -> pl.LazyFrame:
     return pl.DataFrame(
         {
             "entity_id": ["L1"] * 5 + ["L2"] * 5,
-            "snapshot_date": [
-                date(2024, 1, d) for d in range(1, 6)
-            ]
-            * 2,
+            "snapshot_date": [date(2024, 1, d) for d in range(1, 6)] * 2,
             "balance": [1000, 950, 900, 850, 800, 500, 500, 500, 500, 500],
             "status": ["current"] * 5 + ["current"] * 4 + [None],
         }
@@ -108,3 +104,106 @@ def test_cross_source_match():
     assert not result.passed
     assert len(result.issues) == 1
     assert result.issues[0].entity_id == "L2"
+
+
+def test_stale_data_trailing_freeze_flagged():
+    """The canonical stale-feed failure: an entity that updated normally,
+    then froze — whole-history constancy is NOT required."""
+    df = pl.DataFrame(
+        {
+            "entity_id": ["L1"] * 6,
+            "snapshot_date": [date(2024, 1, d) for d in range(1, 7)],
+            "balance": [100, 200, 300, 300, 300, 300],  # trailing run of 4
+        }
+    ).lazy()
+    check = StaleDataCheck(field="balance", max_unchanged=3)
+    result = check.run(df)
+    assert not result.passed
+    assert len(result.issues) == 1
+    issue = result.issues[0]
+    assert issue.entity_id == "L1"
+    assert issue.snapshot_date == date(2024, 1, 6)  # dated at the last snapshot
+    assert issue.details["trailing_unchanged"] == 4
+
+
+def test_stale_data_recently_changing_not_flagged():
+    df = pl.DataFrame(
+        {
+            "entity_id": ["L1"] * 6,
+            "snapshot_date": [date(2024, 1, d) for d in range(1, 7)],
+            "balance": [300, 300, 300, 300, 300, 100],  # changed on the last snapshot
+        }
+    ).lazy()
+    check = StaleDataCheck(field="balance", max_unchanged=3)
+    result = check.run(df)
+    assert result.passed
+
+
+def test_volatility_from_zero_not_flagged():
+    """0 → x transitions have an infinite relative change; fields that
+    legitimately start at zero must not spam 'changed by inf%' findings."""
+    df = pl.DataFrame(
+        {
+            "entity_id": ["L1"] * 3,
+            "snapshot_date": [date(2024, 1, d) for d in range(1, 4)],
+            "balance": [0.0, 500.0, 500.0],
+        }
+    ).lazy()
+    check = VolatilityCheck(field="balance", max_pct_change=0.5)
+    result = check.run(df)
+    assert result.passed
+
+
+def test_volatility_description_renders_percent():
+    df = pl.DataFrame(
+        {
+            "entity_id": ["L1"] * 2,
+            "snapshot_date": [date(2024, 1, 1), date(2024, 1, 2)],
+            "balance": [1000.0, 1750.0],  # +75%
+        }
+    ).lazy()
+    check = VolatilityCheck(field="balance", max_pct_change=0.5)
+    result = check.run(df)
+    assert len(result.issues) == 1
+    assert "75.00%" in result.issues[0].description
+
+
+def test_unknown_check_param_warns(caplog):
+    """A YAML typo (z_treshold) must leave a trace, not silently run the
+    check with default tuning."""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="lens.checks.base"):
+        VolatilityCheck(field="balance", max_pct_chnage=0.9)  # typo'd knob
+    assert any("unknown parameter" in rec.message for rec in caplog.records)
+    assert any("max_pct_chnage" in rec.message for rec in caplog.records)
+
+
+def test_registry_collision_warns(caplog):
+    import logging
+
+    from lens.checks.base import BaseCheck
+    from lens.checks.registry import CheckRegistry
+    from lens.types import CheckResult
+
+    reg = CheckRegistry()
+
+    class _A(BaseCheck):
+        name = "dup_check"
+
+        def run(self, data, *, entity_col="entity_id", snapshot_col="snapshot_date"):
+            return CheckResult(check_name=self.name, passed=True)
+
+    class _B(BaseCheck):
+        name = "dup_check"
+
+        def run(self, data, *, entity_col="entity_id", snapshot_col="snapshot_date"):
+            return CheckResult(check_name=self.name, passed=True)
+
+    reg.register(_A)
+    with caplog.at_level(logging.WARNING, logger="lens.checks.registry"):
+        reg.register(_A)  # same class → silent (idempotent re-import)
+    assert not caplog.records
+    with caplog.at_level(logging.WARNING, logger="lens.checks.registry"):
+        reg.register(_B)  # different class, same name → warns
+    assert any("re-registered" in rec.message for rec in caplog.records)

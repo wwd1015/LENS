@@ -33,22 +33,40 @@ def _make_consistent_sources() -> dict[str, pl.LazyFrame]:
     loan_pool = pl.LazyFrame(
         {
             "deal_id": [
-                "d1", "d1", "d1",  # snap1: 3 loans
-                "d2", "d2",        # snap1: 2 loans
-                "d1", "d1",        # snap2: 2 loans
-                "d2", "d2", "d2",  # snap2: 3 loans
+                "d1",
+                "d1",
+                "d1",  # snap1: 3 loans
+                "d2",
+                "d2",  # snap1: 2 loans
+                "d1",
+                "d1",  # snap2: 2 loans
+                "d2",
+                "d2",
+                "d2",  # snap2: 3 loans
             ],
             "snapshot_date": [
-                snap1, snap1, snap1,
-                snap1, snap1,
-                snap2, snap2,
-                snap2, snap2, snap2,
+                snap1,
+                snap1,
+                snap1,
+                snap1,
+                snap1,
+                snap2,
+                snap2,
+                snap2,
+                snap2,
+                snap2,
             ],
             "balance": [
-                100.0, 200.0, 300.0,   # d1@snap1 sum=600
-                400.0, 500.0,          # d2@snap1 sum=900
-                250.0, 250.0,          # d1@snap2 sum=500
-                100.0, 200.0, 300.0,   # d2@snap2 sum=600
+                100.0,
+                200.0,
+                300.0,  # d1@snap1 sum=600
+                400.0,
+                500.0,  # d2@snap1 sum=900
+                250.0,
+                250.0,  # d1@snap2 sum=500
+                100.0,
+                200.0,
+                300.0,  # d2@snap2 sum=600
             ],
         }
     )
@@ -202,8 +220,10 @@ def test_evaluate_equation_flags_relative_tolerance_break():
         {
             "deal_id": ["d1", "d2", "d1", "d2"],
             "snapshot_date": [
-                date(2026, 1, 31), date(2026, 1, 31),
-                date(2026, 2, 28), date(2026, 2, 28),
+                date(2026, 1, 31),
+                date(2026, 1, 31),
+                date(2026, 2, 28),
+                date(2026, 2, 28),
             ],
             "advance_rate": [0.9, 0.7, 0.8, 0.75],
         }
@@ -287,8 +307,10 @@ def test_check_flags_broken_equation():
         {
             "deal_id": ["d1", "d2", "d1", "d2"],
             "snapshot_date": [
-                date(2026, 1, 31), date(2026, 1, 31),
-                date(2026, 2, 28), date(2026, 2, 28),
+                date(2026, 1, 31),
+                date(2026, 1, 31),
+                date(2026, 2, 28),
+                date(2026, 2, 28),
             ],
             "balance": [480.0, 630.0, 400.0, 500.0],
         }
@@ -396,11 +418,164 @@ def test_equation_module_uses_no_eval_or_ast_parse():
     # Match call sites only (token followed by `(`); won't trip on the docstring
     # noun "eval" or on `evaluate_*` identifiers because of the surrounding
     # word boundaries + literal `(`.
-    call_pattern = re.compile(
-        r"(?<![A-Za-z_])(eval|exec|ast\.parse|ast\.literal_eval)\("
-    )
+    call_pattern = re.compile(r"(?<![A-Za-z_])(eval|exec|ast\.parse|ast\.literal_eval)\(")
     import_pattern = re.compile(r"^\s*(?:import\s+ast\b|from\s+ast\s+import)", re.MULTILINE)
     call_matches = call_pattern.findall(src)
     import_matches = import_pattern.findall(src)
     assert call_matches == [], f"equation.py must not call {call_matches}"
     assert import_matches == [], f"equation.py must not import ast: {import_matches}"
+
+
+# ---------------------------------------------------------------------------
+# Per-rule failure isolation + null-reconciliation semantics
+# ---------------------------------------------------------------------------
+
+
+def test_bad_rule_does_not_kill_other_rules(caplog):
+    """A rule whose field doesn't exist raises a PolarsError at collect —
+    it must be skipped, not disable every other rule in the run."""
+
+    class _BadRule:
+        name = "typo_field"
+        equation = {
+            "lhs": {"table": "a", "field": "no_such_field", "agg": None, "group_by": None},
+            "rhs": {"table": "b", "field": "v", "agg": None, "group_by": None},
+            "tolerance": 0.0,
+            "tolerance_type": "absolute",
+        }
+
+    class _GoodRule:
+        name = "good"
+        equation = {
+            "lhs": {"table": "a", "field": "v", "agg": None, "group_by": None},
+            "rhs": {"table": "b", "field": "v", "agg": None, "group_by": None},
+            "tolerance": 1.0,
+            "tolerance_type": "absolute",
+        }
+
+    class _FakeWiki:
+        def all_rules(self):
+            return [_BadRule(), _GoodRule()]
+
+    snap = date(2026, 1, 1)
+    sources = {
+        "a": pl.LazyFrame({"deal_id": ["x"], "snapshot_date": [snap], "v": [100.0]}),
+        "b": pl.LazyFrame({"deal_id": ["x"], "snapshot_date": [snap], "v": [110.0]}),
+    }
+    with caplog.at_level("WARNING"):
+        result = CrossSourceWikiCheck().run_cross(
+            sources, wiki=_FakeWiki(), entity_col="deal_id", snapshot_col="snapshot_date"
+        )
+    # The bad rule is skipped with a warning; the good rule still fires.
+    assert any("typo_field" in rec.message for rec in caplog.records)
+    assert len(result.issues) == 1
+    assert result.issues[0].details["rule"] == "good"
+
+
+def test_evaluate_equation_null_vs_value_is_violation():
+    snap = date(2026, 1, 1)
+    sources = {
+        "a": pl.LazyFrame({"eid": ["x", "y"], "snap": [snap, snap], "v": [100.0, None]}),
+        "b": pl.LazyFrame({"eid": ["x", "y"], "snap": [snap, snap], "v": [100.0, 100.0]}),
+    }
+    eq = {
+        "lhs": {"table": "a", "field": "v", "agg": None, "group_by": None},
+        "rhs": {"table": "b", "field": "v", "agg": None, "group_by": None},
+        "tolerance": 1.0,
+        "tolerance_type": "absolute",
+    }
+    out = evaluate_equation(eq, sources, entity_col="eid", snapshot_col="snap").collect()
+    assert out.height == 1
+    row = out.row(0, named=True)
+    assert row["eid"] == "y"
+    assert row["__lhs__"] is None
+    assert row["__diff__"] is None
+
+
+def test_evaluate_equation_null_both_sides_not_violation():
+    snap = date(2026, 1, 1)
+    sources = {
+        "a": pl.LazyFrame(
+            {"eid": ["x"], "snap": [snap], "v": [None]},
+            schema={"eid": pl.Utf8, "snap": pl.Date, "v": pl.Float64},
+        ),
+        "b": pl.LazyFrame(
+            {"eid": ["x"], "snap": [snap], "v": [None]},
+            schema={"eid": pl.Utf8, "snap": pl.Date, "v": pl.Float64},
+        ),
+    }
+    eq = {
+        "lhs": {"table": "a", "field": "v", "agg": None, "group_by": None},
+        "rhs": {"table": "b", "field": "v", "agg": None, "group_by": None},
+        "tolerance": 1.0,
+        "tolerance_type": "absolute",
+    }
+    out = evaluate_equation(eq, sources, entity_col="eid", snapshot_col="snap").collect()
+    assert out.height == 0
+
+
+def test_evaluate_equation_missing_entity_is_violation():
+    """An entity present in only one table must surface, not vanish in the join."""
+    snap = date(2026, 1, 1)
+    sources = {
+        "a": pl.LazyFrame({"eid": ["x", "y"], "snap": [snap, snap], "v": [100.0, 50.0]}),
+        "b": pl.LazyFrame({"eid": ["x"], "snap": [snap], "v": [100.0]}),
+    }
+    eq = {
+        "lhs": {"table": "a", "field": "v", "agg": None, "group_by": None},
+        "rhs": {"table": "b", "field": "v", "agg": None, "group_by": None},
+        "tolerance": 1.0,
+        "tolerance_type": "absolute",
+    }
+    out = evaluate_equation(eq, sources, entity_col="eid", snapshot_col="snap").collect()
+    assert out.height == 1
+    row = out.row(0, named=True)
+    assert row["eid"] == "y"
+    assert row["__rhs__"] is None
+
+
+def test_evaluate_equation_non_numeric_tolerance_raises():
+    eq = {
+        "lhs": {"table": "a", "field": "v"},
+        "rhs": {"table": "a", "field": "v"},
+        "tolerance": "0.01",  # sloppy YAML — quoted number
+        "tolerance_type": "absolute",
+    }
+    with pytest.raises(ValueError, match="tolerance must be a number"):
+        evaluate_equation(eq, {}, entity_col="e", snapshot_col="s")
+
+
+def test_check_null_mismatch_issue_shape():
+    """A one-sided null renders 'missing', carries the marker, and scores 1.0
+    so the orchestrator maps it to CRITICAL."""
+
+    class _Rule:
+        name = "null_rule"
+        equation = {
+            "lhs": {"table": "a", "field": "v", "agg": None, "group_by": None},
+            "rhs": {"table": "b", "field": "v", "agg": None, "group_by": None},
+            "tolerance": 1.0,
+            "tolerance_type": "absolute",
+        }
+
+    class _FakeWiki:
+        def all_rules(self):
+            return [_Rule()]
+
+    snap = date(2026, 1, 1)
+    sources = {
+        "a": pl.LazyFrame(
+            {"deal_id": ["x"], "snapshot_date": [snap], "v": [None]},
+            schema={"deal_id": pl.Utf8, "snapshot_date": pl.Date, "v": pl.Float64},
+        ),
+        "b": pl.LazyFrame({"deal_id": ["x"], "snapshot_date": [snap], "v": [100.0]}),
+    }
+    result = CrossSourceWikiCheck().run_cross(
+        sources, wiki=_FakeWiki(), entity_col="deal_id", snapshot_col="snapshot_date"
+    )
+    assert len(result.issues) == 1
+    issue = result.issues[0]
+    assert issue.details["null_mismatch"] is True
+    assert issue.details["score"] == 1.0
+    assert issue.details["lhs"] is None
+    assert "missing" in issue.description

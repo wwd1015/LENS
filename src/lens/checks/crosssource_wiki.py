@@ -106,12 +106,20 @@ class CrossSourceWikiCheck(BaseCheck):
             try:
                 violations_lf = evaluate_equation(eq, sources, entity_col, snapshot_col)
                 violations = violations_lf.collect()
-            except (ValueError, KeyError) as exc:
+            except (ValueError, KeyError, pl.exceptions.PolarsError) as exc:
+                # PolarsError covers execution-time failures too (a rule
+                # referencing a field the table doesn't have raises
+                # ColumnNotFoundError at collect) — one bad rule must skip,
+                # not disable every other rule in the run.
                 logger.warning(
-                    "cross_source_wiki: rule '%s' has malformed equation (%s); skipping",
+                    "cross_source_wiki: rule '%s' failed to evaluate (%s); skipping",
                     rule.name,
                     exc,
                 )
+                continue
+
+            if violations.height == 0:
+                # No breaches — skip the operand-breakdown work entirely.
                 continue
 
             lhs_node = eq.get("lhs", {}) or {}
@@ -126,9 +134,36 @@ class CrossSourceWikiCheck(BaseCheck):
             rhs_label = equation.node_label(eq.get("rhs", {}) or {})
             formula = equation.equation_formula(eq)
 
+            def _fmt(value: float | None) -> str:
+                return "missing" if value is None else f"{value:.4f}"
+
             for row in violations.iter_rows(named=True):
                 key = (row[entity_col], row[snapshot_col])
                 term_values = term_lookup.get(key, [])
+                lhs_v, rhs_v, diff_v = row["__lhs__"], row["__rhs__"], row["__diff__"]
+                null_mismatch = lhs_v is None or rhs_v is None
+                if null_mismatch:
+                    missing_side = "lhs" if lhs_v is None else "rhs"
+                    desc = (
+                        f"Rule '{rule.name}' violated: {missing_side} is missing/null "
+                        f"(lhs={_fmt(lhs_v)}, rhs={_fmt(rhs_v)})"
+                    )
+                else:
+                    desc = (
+                        f"Rule '{rule.name}' violated: "
+                        f"lhs={_fmt(lhs_v)}, rhs={_fmt(rhs_v)}, diff={_fmt(diff_v)}"
+                    )
+                details: dict[str, Any] = {
+                    "lhs": float(lhs_v) if lhs_v is not None else None,
+                    "rhs": float(rhs_v) if rhs_v is not None else None,
+                    "diff": float(diff_v) if diff_v is not None else None,
+                    "rule": rule.name,
+                }
+                if null_mismatch:
+                    # One side absent entirely — score as a full (100%)
+                    # relative break so the orchestrator maps it to CRITICAL.
+                    details["null_mismatch"] = True
+                    details["score"] = 1.0
                 issues.append(
                     Issue(
                         check_name=self.name,
@@ -136,16 +171,9 @@ class CrossSourceWikiCheck(BaseCheck):
                         entity_id=str(row[entity_col]),
                         field_name=field_name,
                         snapshot_date=row[snapshot_col],
-                        description=(
-                            f"Rule '{rule.name}' violated: "
-                            f"lhs={row['__lhs__']:.4f}, rhs={row['__rhs__']:.4f}, "
-                            f"diff={row['__diff__']:.4f}"
-                        ),
+                        description=desc,
                         details={
-                            "lhs": float(row["__lhs__"]),
-                            "rhs": float(row["__rhs__"]),
-                            "diff": float(row["__diff__"]),
-                            "rule": rule.name,
+                            **details,
                             "formula": formula,
                             "lhs_label": lhs_label,
                             "rhs_label": rhs_label,
