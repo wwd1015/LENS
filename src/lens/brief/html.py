@@ -547,9 +547,12 @@ def render_brief(
 
     suppressed_views = [_finding_view(f, rcas) for f in sorted(suppressed_findings, key=_sort_key)]
 
-    # Delta vs. prior — None when no prior path was given.
+    # Delta vs. prior — None when no prior path was given. Computed over the
+    # FULL findings list (pre-cap, including feedback-suppressed): a finding
+    # that was suppressed or capped out of the visible set is still open, and
+    # must not be reported as "cleared up".
     prior_ids = _read_prior_finding_ids(prior_findings_path)
-    delta_counts = _compute_delta(visible_findings, prior_ids)
+    delta_counts = _compute_delta(findings, prior_ids)
 
     summary_counts = _summary_counts(visible_findings)
 

@@ -91,13 +91,28 @@ def _first_http_reference(refs: list[str] | None) -> str | None:
     return None
 
 
+def _sanitize_hypothesis(text: str) -> str:
+    """Flatten LLM-authored hypothesis text for safe one-line interpolation.
+
+    The hypothesis is model output built partly from row data and commit
+    subjects — a newline or markdown marker in it could fabricate extra
+    digest lines or break the list structure. Collapse all whitespace runs
+    and escape the markdown characters the digest itself uses.
+    """
+    flattened = " ".join(text.split())
+    for ch in ("`", "*", "_"):
+        flattened = flattened.replace(ch, "\\" + ch)
+    return flattened
+
+
 def _truncate_hypothesis(text: str) -> str:
-    """Trim hypothesis text to fit on one summary line.
+    """Sanitize + trim hypothesis text to fit on one summary line.
 
     If the text already fits, return it unchanged. Otherwise cut to
     ``_HYPOTHESIS_MAX_CHARS`` and append a single horizontal-ellipsis (the
     spec literally specifies the trailing ``…`` character, not three dots).
     """
+    text = _sanitize_hypothesis(text)
     if len(text) <= _HYPOTHESIS_MAX_CHARS:
         return text
     return text[:_HYPOTHESIS_MAX_CHARS] + "…"

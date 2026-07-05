@@ -75,6 +75,11 @@ def _coerce_float(value: Any) -> float:
         return 0.0
 
 
+class ClaudeCodeUnavailableError(RuntimeError):
+    """The `claude` binary is not available — a configuration problem, not a
+    transient LLM failure. Never worth retrying."""
+
+
 def _parse_claude_json(stdout: str) -> tuple[str, CallCost]:
     """Parse `claude -p --output-format json` stdout into ``(text, CallCost)``.
 
@@ -82,6 +87,10 @@ def _parse_claude_json(stdout: str) -> tuple[str, CallCost]:
     CLI emitting plain text, an error banner, or a future format change), the
     raw stdout is returned as the completion text with a zero-cost record — the
     caller still gets a usable string and never crashes on cost accounting.
+
+    An envelope with ``is_error`` set raises instead: the ``result`` text is an
+    error banner (auth expiry, rate limit), and returning it as the completion
+    would render "Invalid API key…" as an RCA hypothesis.
     """
     try:
         payload = json.loads(stdout)
@@ -89,6 +98,11 @@ def _parse_claude_json(stdout: str) -> tuple[str, CallCost]:
         return stdout, CallCost()
     if not isinstance(payload, dict):
         return stdout, CallCost()
+
+    if payload.get("is_error"):
+        raise RuntimeError(
+            f"claude headless call reported an error: {payload.get('result')!r}"
+        )
 
     # `result` carries the model's text; `structured_output` is used instead
     # when the call was made with --json-schema (we don't, but stay robust).
@@ -156,19 +170,24 @@ class ClaudeCodeClient:
         return sum(c.cost_usd for c in self.calls)
 
     def complete(self, prompt: str) -> str:
-        cmd = [self.executable, "-p", prompt, "--output-format", "json"]
+        # The prompt goes over stdin, never argv: a big RCA/ingest prompt
+        # would blow Linux's ~128 KiB per-argument ceiling (OSError E2BIG),
+        # and argv is world-readable via /proc/<pid>/cmdline — lending data
+        # rows must not sit in the process listing for the call's duration.
+        cmd = [self.executable, "-p", "--output-format", "json"]
         if self.extra_args:
             cmd.extend(self.extra_args)
         try:
             result = subprocess.run(
                 cmd,
+                input=prompt,
                 capture_output=True,
                 text=True,
                 timeout=self.timeout_s,
                 check=True,
             )
         except FileNotFoundError as e:
-            raise RuntimeError(
+            raise ClaudeCodeUnavailableError(
                 f"`{self.executable}` not on PATH; install Claude Code or set "
                 f"`executable=` on ClaudeCodeClient"
             ) from e
@@ -178,6 +197,8 @@ class ClaudeCodeClient:
             ) from e
         except subprocess.TimeoutExpired as e:
             raise RuntimeError(f"claude headless run timed out after {self.timeout_s}s") from e
+        except OSError as e:
+            raise RuntimeError(f"claude headless run failed to launch: {e}") from e
         text, cost = _parse_claude_json(result.stdout)
         self.calls.append(cost)
         self.last_call = cost
@@ -224,6 +245,24 @@ def _parse_frontmatter(md: str) -> dict:
 class _TransientIngestError(Exception):
     """Internal — raised when the response is parseable as text but the
     extracted page is missing required fields. Triggers a retry."""
+
+
+_PROVENANCE_FILENAME = ".provenance.json"
+
+
+def _load_provenance(rules_dir: Path) -> dict[str, str]:
+    """Read the slug → source-key map recording which ingest owns each page."""
+    path = rules_dir / _PROVENANCE_FILENAME
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+
+
+def _save_provenance(rules_dir: Path, provenance: dict[str, str]) -> None:
+    path = rules_dir / _PROVENANCE_FILENAME
+    path.write_text(json.dumps(provenance, indent=2, sort_keys=True), encoding="utf-8")
 
 
 class IngestionWorker:
@@ -296,6 +335,10 @@ class IngestionWorker:
                 if not lhs.get("table"):
                     raise _TransientIngestError("response missing equation.lhs.table")
                 return page, fm, raw
+            except ClaudeCodeUnavailableError:
+                # Configuration problem — retrying would just burn
+                # max_retries × timeout waiting for a binary to appear.
+                raise
             except Exception as e:  # noqa: BLE001 — retry on anything LLM-side
                 last_exc = e
                 logger.warning(
@@ -367,7 +410,31 @@ class IngestionWorker:
         rules_dir = self.wiki_root / "rules"
         rules_dir.mkdir(parents=True, exist_ok=True)
         out_path = rules_dir / f"{slug}.md"
+
+        # Overwrite guard: the slug comes from LLM-extracted frontmatter, so
+        # a hostile comment in an ingested source file could otherwise name
+        # its output after another rule's page and silently replace it
+        # (prompt-injection → persistent detection bypass). Ownership is
+        # tracked in a provenance sidecar: once a slug is recorded as coming
+        # from a set of source paths, only a re-ingest of the SAME sources
+        # may overwrite it. Pages that predate the sidecar are adopted (and
+        # locked) by the first ingest that touches them.
+        source_key = "|".join(sorted(str(Path(p).resolve()) for p in code_paths))
+        provenance = _load_provenance(rules_dir)
+        owner = provenance.get(slug)
+        if out_path.exists() and owner is not None and owner != source_key:
+            logger.warning(
+                "ingestion refused: dataset=%s extracted name %r collides with "
+                "existing page %s owned by a different source; not overwriting",
+                dataset_name,
+                name,
+                out_path,
+            )
+            return []
+
         out_path.write_text(page)
+        provenance[slug] = source_key
+        _save_provenance(rules_dir, provenance)
         logger.info("wrote %s", out_path)
         return [out_path]
 

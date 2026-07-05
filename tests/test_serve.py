@@ -108,3 +108,66 @@ def test_unknown_route_404(server):
 def test_healthz(server):
     with urllib.request.urlopen(_url(server, "/healthz")) as resp:
         assert json.loads(resp.read()) == {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# CSRF / robustness hardening
+# ---------------------------------------------------------------------------
+
+
+def _post_raw(srv, path, body: bytes, headers: dict):
+    req = urllib.request.Request(_url(srv, path), data=body, headers=headers, method="POST")
+    return urllib.request.urlopen(req)
+
+
+def test_post_feedback_rejects_non_json_content_type(server, tmp_path):
+    """A no-cors browser POST (text/plain) must not land feedback — that's
+    the CSRF vector for forging suppression votes."""
+    body = json.dumps({"finding_id": "f1", "label": "false_positive"}).encode()
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        _post_raw(server, "/feedback", body, {"Content-Type": "text/plain"})
+    assert exc_info.value.code == 415
+    assert not (tmp_path / "feedback.jsonl").exists()
+
+
+def test_post_feedback_rejects_foreign_origin(server, tmp_path):
+    body = json.dumps({"finding_id": "f1", "label": "false_positive"}).encode()
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        _post_raw(
+            server,
+            "/feedback",
+            body,
+            {"Content-Type": "application/json", "Origin": "https://evil.example"},
+        )
+    assert exc_info.value.code == 403
+    assert not (tmp_path / "feedback.jsonl").exists()
+
+
+def test_post_feedback_accepts_local_origin(server):
+    body = json.dumps({"finding_id": "f1", "label": "real"}).encode()
+    host, port = server.server_address[:2]
+    with _post_raw(
+        server,
+        "/feedback",
+        body,
+        {"Content-Type": "application/json", "Origin": f"http://127.0.0.1:{port}"},
+    ) as resp:
+        assert resp.status == 200
+
+
+def test_post_feedback_malformed_content_length_is_400(server):
+    """`Content-Length: abc` previously crashed the handler thread with no
+    HTTP response at all."""
+    import http.client
+
+    host, port = server.server_address[:2]
+    conn = http.client.HTTPConnection(host, port, timeout=5)
+    try:
+        conn.putrequest("POST", "/feedback", skip_accept_encoding=True)
+        conn.putheader("Content-Type", "application/json")
+        conn.putheader("Content-Length", "abc")
+        conn.endheaders()
+        resp = conn.getresponse()
+        assert resp.status == 400
+    finally:
+        conn.close()

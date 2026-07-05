@@ -486,3 +486,97 @@ def test_load_hand_authored_missing_dir_raises(tmp_path):
     """A missing source directory raises FileNotFoundError."""
     with pytest.raises(FileNotFoundError):
         load_hand_authored(tmp_path / "does-not-exist", tmp_path / "lens-wiki")
+
+
+# ---------------------------------------------------------------------------
+# Headless-client hardening: stdin prompt, is_error envelope, no-retry on
+# missing binary, provenance overwrite guard.
+# ---------------------------------------------------------------------------
+
+
+def test_claude_client_sends_prompt_via_stdin(monkeypatch):
+    """The prompt must go over stdin, not argv — argv has a ~128KiB ceiling
+    and is world-readable via /proc/<pid>/cmdline."""
+    from lens.wiki import ingest as ingest_mod
+    from lens.wiki.ingest import ClaudeCodeClient
+
+    captured = {}
+
+    def _fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["input"] = kwargs.get("input")
+
+        class _R:
+            stdout = json.dumps({"result": "ok", "total_cost_usd": 0.01, "usage": {}})
+
+        return _R()
+
+    monkeypatch.setattr(ingest_mod.subprocess, "run", _fake_run)
+    out = ClaudeCodeClient().complete("the prompt with lending data")
+    assert out == "ok"
+    assert captured["input"] == "the prompt with lending data"
+    assert "the prompt with lending data" not in captured["cmd"]
+
+
+def test_parse_claude_json_raises_on_is_error():
+    from lens.wiki.ingest import _parse_claude_json
+
+    envelope = json.dumps({"is_error": True, "result": "Invalid API key"})
+    with pytest.raises(RuntimeError, match="Invalid API key"):
+        _parse_claude_json(envelope)
+
+
+def test_unavailable_client_is_not_retried(tmp_path):
+    """`claude` missing from PATH is a config problem — one attempt, not
+    max_retries × timeout."""
+    from lens.wiki.ingest import ClaudeCodeUnavailableError
+
+    class _MissingBinaryLLM:
+        def __init__(self):
+            self.calls = 0
+
+        def complete(self, prompt: str) -> str:
+            self.calls += 1
+            raise ClaudeCodeUnavailableError("`claude` not on PATH")
+
+    wiki = _seed_wiki(tmp_path)
+    client = _MissingBinaryLLM()
+    worker = IngestionWorker(repo_root=REPO_ROOT, wiki_root=wiki, client=client, max_retries=3)
+    with pytest.raises(ClaudeCodeUnavailableError):
+        worker.ingest(dataset_name="senior_debt", code_paths=[FIXTURES / "safe_query.sql"])
+    assert client.calls == 1
+
+
+def test_ingest_refuses_cross_source_overwrite(tmp_path, caplog):
+    """A hostile source whose extracted name collides with another source's
+    page must not overwrite it (prompt-injection → detection bypass)."""
+    wiki = _seed_wiki(tmp_path)
+    worker = IngestionWorker(
+        repo_root=REPO_ROOT, wiki_root=wiki, client=_StubLLM(), max_retries=3
+    )
+
+    # Source A ingests and owns the page.
+    written = worker.ingest(
+        dataset_name="senior_debt", code_paths=[FIXTURES / "safe_query.sql"]
+    )
+    assert len(written) == 1
+    original = written[0].read_text()
+
+    # A DIFFERENT source produces the same extracted name → refused.
+    other_sql = tmp_path / "other_source.sql"
+    other_sql.write_text("SELECT 1 AS hostile")
+    with caplog.at_level("WARNING"):
+        refused = worker.ingest(
+            dataset_name="other_dataset",
+            code_paths=[other_sql],
+            allow_secrets=True,
+        )
+    assert refused == []
+    assert written[0].read_text() == original
+    assert any("ingestion refused" in rec.message for rec in caplog.records)
+
+    # Re-ingest of the ORIGINAL source still updates its own page.
+    again = worker.ingest(
+        dataset_name="senior_debt", code_paths=[FIXTURES / "safe_query.sql"]
+    )
+    assert again == written

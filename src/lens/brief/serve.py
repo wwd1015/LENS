@@ -49,8 +49,30 @@ class BriefServer(ThreadingHTTPServer):
         self.feedback_path = Path(feedback_path)
 
 
+# Origin hosts allowed to POST feedback. The server is a loopback tool; a
+# same-machine browser tab is the only legitimate caller. Anything else —
+# notably a hostile web page POSTing at http://127.0.0.1:8377 from the
+# analyst's browser — must not be able to forge suppression votes.
+_ALLOWED_ORIGIN_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
+
+
+def _origin_host(origin: str) -> str | None:
+    """Extract the host part of an Origin header value (no ports)."""
+    from urllib.parse import urlsplit
+
+    try:
+        host = urlsplit(origin).hostname
+    except ValueError:
+        return None
+    return host
+
+
 class _BriefHandler(BaseHTTPRequestHandler):
     server: BriefServer  # narrowed for type checkers
+
+    # A stalled client (huge declared Content-Length, body never sent) must
+    # not pin a handler thread forever.
+    timeout = 30
 
     # -- helpers ---------------------------------------------------------
 
@@ -98,7 +120,25 @@ class _BriefHandler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": "not found"})
             return
 
-        length = int(self.headers.get("Content-Length") or 0)
+        # CSRF hardening: feedback verdicts drive the suppression loop, so a
+        # forged POST can mute real alerts. Requiring application/json blocks
+        # no-cors browser POSTs (forms can't send JSON; a cross-origin JSON
+        # fetch triggers a preflight this server never approves), and the
+        # Origin check rejects anything a browser stamps as non-local.
+        content_type = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip()
+        if content_type.lower() != "application/json":
+            self._send_json(415, {"error": "Content-Type must be application/json"})
+            return
+        origin = self.headers.get("Origin")
+        if origin and _origin_host(origin) not in _ALLOWED_ORIGIN_HOSTS:
+            self._send_json(403, {"error": "cross-origin feedback is not accepted"})
+            return
+
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self._send_json(400, {"error": "invalid Content-Length"})
+            return
         if length <= 0 or length > _MAX_BODY_BYTES:
             self._send_json(400, {"error": "missing or oversized request body"})
             return

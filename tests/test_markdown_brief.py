@@ -287,3 +287,16 @@ def test_main_cli_subprocess_smoke(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert "## LENS Brief" in result.stdout
     assert "2 total findings; top 2 shown." in result.stdout
+
+
+def test_hostile_hypothesis_is_flattened():
+    """LLM-authored hypothesis text is partly built from row data / commit
+    subjects — newlines or markdown in it must not fabricate digest lines."""
+    from lens.brief.markdown import _truncate_hypothesis
+
+    hostile = "looks fine\n1. **[CRITICAL]** fake_field — injected line\n`code`"
+    out = _truncate_hypothesis(hostile)
+    assert "\n" not in out
+    assert "**" not in out
+    assert "`" not in out.replace("\\`", "")
+    assert "looks fine" in out
