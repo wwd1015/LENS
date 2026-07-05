@@ -63,6 +63,7 @@ from lens.types import (
     SEVERITY_ORDER,
     Finding,
     Issue,
+    Severity,
     compute_finding_id,
     detector_family,
 )
@@ -120,12 +121,18 @@ def _raw_score(issue: Issue) -> float:
     Tries ``score`` → ``z_score`` → ``diff`` in that order; missing keys yield
     ``0.0`` (which maps to ``Severity.INFO`` under every default threshold
     table).
+
+    The magnitude is what gets scored: detectors flag on ``|z| > threshold``
+    but store the SIGNED value for display, while the threshold tables are
+    one-sided ascending — a signed −6 would otherwise fall below every
+    threshold and bury a 6-sigma drop (the most alarming direction in
+    lending) at ``(INFO, ~0.0)``.
     """
     details = issue.details or {}
     for key in ("score", "z_score", "diff"):
         if key in details:
             try:
-                return float(details[key])
+                return abs(float(details[key]))
             except (TypeError, ValueError):
                 continue
     return 0.0
@@ -191,22 +198,55 @@ def _stable_dedupe(items: list[str]) -> list[str]:
     return out
 
 
-def _apply_agreement_boost(rep: Issue, detector_sources: list[str]) -> Issue:
+def _apply_agreement_boost(rep: Issue, group: list[Issue]) -> Issue:
     """Boost confidence when ≥2 distinct detector families agree on a point.
 
     Confidence moves halfway toward 1.0 (``conf + (1 - conf) * 0.5``);
     severity is untouched. The pre-boost value and the agreeing families are
     recorded in ``details["agreement_boost"]`` so the brief / RCA can explain
     why the number moved.
+
+    Agreement only counts when the flagging detectors looked at the same
+    data: two single-source families must share a ``__source__``; a
+    cross-source detector (no ``__source__`` — it reads multiple tables)
+    counts as agreeing with any source. Two families that each flagged a
+    same-named field in DIFFERENT tables are not corroboration.
     """
-    families = _stable_dedupe([detector_family(s) for s in detector_sources])
-    if len(families) < 2:
+    # Distinct (family, source) pairs across the dedup group.
+    fam_src: list[tuple[str, str | None]] = []
+    for issue in group:
+        fam = detector_family(issue.detector_source or issue.check_name)
+        src = (issue.details or {}).get("__source__")
+        if (fam, src) not in fam_src:
+            fam_src.append((fam, src))
+
+    per_source: dict[str | None, set[str]] = {}
+    for fam, src in fam_src:
+        per_source.setdefault(src, set()).add(fam)
+    cross_families = per_source.get(None, set())
+
+    agreeing: set[str] = set()
+    for src, fams in per_source.items():
+        if src is None:
+            continue
+        combined = fams | cross_families
+        if len(combined) >= 2:
+            agreeing |= combined
+    if len(cross_families) >= 2:
+        agreeing |= cross_families
+    if len(agreeing) < 2:
         return rep
+
+    families = _stable_dedupe([fam for fam, _ in fam_src if fam in agreeing])
+    sources = _stable_dedupe(
+        [src for fam, src in fam_src if fam in agreeing and src is not None]
+    )
     before = float(rep.confidence or 0.0)
     boosted = min(1.0, before + (1.0 - before) * _AGREEMENT_BOOST_FACTOR)
     new_details = dict(rep.details or {})
     new_details["agreement_boost"] = {
         "families": families,
+        "sources": sources,
         "confidence_before": round(before, 6),
     }
     return dataclasses.replace(rep, confidence=boosted, details=new_details)
@@ -348,18 +388,36 @@ class DetectionOrchestrator:
         else:
             wiki_cache = WikiCache.from_dir(Path(wiki_root))
 
-        # Materialize sources up front; once materialized, we hand the same
-        # LazyFrame reference to both single- and cross-source runs.
+        # Materialize sources up front; the eager .collect().lazy() reads each
+        # file-backed source ONCE per run instead of once per check-collect,
+        # and the same in-memory frame then feeds both single- and cross-source
+        # runs. A source that cannot be read is itself an incident for a
+        # surveillance tool — it becomes a CRITICAL source_unavailable finding,
+        # never a silent "all clear".
+        all_issues: list[Issue] = []
         lazy_sources: dict[str, pl.LazyFrame] = {}
         for name, src in sources.items():
             try:
-                lazy_sources[name] = _materialize_source(src)
-            except Exception as exc:  # noqa: BLE001 - log + continue per spec
+                lazy_sources[name] = _materialize_source(src).collect().lazy()
+            except Exception as exc:  # noqa: BLE001 - log + flag, run continues
                 logger.exception(
                     "orchestrator: failed to materialize source %r: %s", name, exc
                 )
-
-        all_issues: list[Issue] = []
+                all_issues.append(
+                    Issue(
+                        check_name="source_unavailable",
+                        severity=Severity.CRITICAL,
+                        entity_id=None,
+                        field_name=name,
+                        snapshot_date=None,
+                        description=(
+                            f"source {name!r} could not be read; every detector "
+                            f"scoped to it was skipped this run: {exc}"
+                        ),
+                        confidence=1.0,
+                        detector_source="source_unavailable",
+                    )
+                )
 
         # --- single-source detectors ------------------------------------
         # Run each registered single-source check against each source. We
@@ -463,7 +521,21 @@ class DetectionOrchestrator:
             detector_sources = _stable_dedupe(
                 [i.detector_source or i.check_name for i in group]
             )
-            rep = _apply_agreement_boost(rep, detector_sources)
+            rep = _apply_agreement_boost(rep, group)
+            # A merge across tables keeps only the representative's
+            # __source__ — record every table that flagged the point so the
+            # other sources' contributions stay visible in the record.
+            merged_sources = _stable_dedupe(
+                [
+                    s
+                    for s in ((i.details or {}).get("__source__") for i in group)
+                    if s
+                ]
+            )
+            if len(merged_sources) > 1:
+                new_details = dict(rep.details or {})
+                new_details["sources"] = merged_sources
+                rep = dataclasses.replace(rep, details=new_details)
             findings.append(
                 Finding(
                     issue=rep,

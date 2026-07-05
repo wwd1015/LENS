@@ -10,12 +10,11 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from lens.brief import render_brief
 from lens.types import Finding, Issue, RCAResult, Severity, compute_finding_id
-
 
 # ---------------------------------------------------------------------------
 # Test helpers
@@ -251,3 +250,28 @@ def test_atomic_write_via_tmp(tmp_path: Path) -> None:
     # ... and no .tmp sibling remains in the directory.
     leftovers = [p.name for p in tmp_path.iterdir() if ".tmp." in p.name]
     assert leftovers == [], f"expected no .tmp leftovers, found {leftovers}"
+
+
+def test_suppressed_finding_is_not_reported_as_resolved(tmp_path: Path) -> None:
+    """A finding downgraded by analyst feedback is still open — the delta
+    must not count it as 'cleared up' just because it left the visible set."""
+    import dataclasses
+
+    f1 = _make_finding(entity_id="e1", field_name="balance")
+    f2 = _make_finding(entity_id="e2", field_name="balance")
+    suppressed_issue = dataclasses.replace(
+        f2.issue,
+        severity=Severity.INFO,
+        details={"suppressed_by_feedback": {"original_severity": "warning"}},
+    )
+    f2_suppressed = dataclasses.replace(f2, issue=suppressed_issue)
+
+    prior_path = tmp_path / "findings.prior.json"
+    _write_findings_file(prior_path, [f1.finding_id, f2.finding_id])
+
+    out = tmp_path / "brief.html"
+    render_brief([f1, f2_suppressed], {}, out, prior_findings_path=prior_path)
+    html = out.read_text(encoding="utf-8")
+
+    assert "0 cleared up" in html
+    assert "2 still open" in html

@@ -74,7 +74,7 @@ class Issue:
     severity: Severity
     entity_id: str | None = None
     field_name: str | None = None
-    snapshot_date: datetime | None = None
+    snapshot_date: date | datetime | None = None
     description: str = ""
     details: dict[str, Any] = field(default_factory=dict)
     confidence: float = 1.0
@@ -176,3 +176,7 @@ class RCAResult:
     input_tokens: int | None = None
     output_tokens: int | None = None
     model: str | None = None
+    reused_from: str | None = None
+    """When the batch reused a prior run's hypothesis for this group, the
+    finding_id whose persisted RCA was reused. ``None`` for fresh
+    investigations (and for RCA JSON written before this field existed)."""

@@ -6,8 +6,8 @@ from textwrap import dedent
 
 import polars as pl
 
-from lens.engine import Suite
 from lens.config import load_suite
+from lens.engine import Suite
 from lens.io import PolarsSource
 
 

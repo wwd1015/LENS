@@ -22,10 +22,13 @@ logger = logging.getLogger(__name__)
 # Treat as read-only — copy via `dict(DEFAULT_THRESHOLDS)` if a caller needs
 # to mutate.
 DEFAULT_THRESHOLDS: dict[str, list[tuple[float, Severity]]] = {
+    # z-score scale: the detector emits (observed − mean) / std and only
+    # flags at |z| > 3, so the table must be in z units — a probability-style
+    # (0.7, 0.85, 0.95) row would make every flagged anomaly CRITICAL.
     "tabpfn_anomaly": [
-        (0.7, Severity.WARNING),
-        (0.85, Severity.ERROR),
-        (0.95, Severity.CRITICAL),
+        (3.0, Severity.WARNING),
+        (4.0, Severity.ERROR),
+        (5.0, Severity.CRITICAL),
     ],
     "stl_residual": [
         (3.0, Severity.WARNING),

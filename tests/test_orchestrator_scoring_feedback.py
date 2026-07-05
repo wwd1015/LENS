@@ -164,6 +164,104 @@ def test_single_check_source_scoping(tmp_path):
     assert findings[0].issue.entity_id == "a"
 
 
+def test_negative_z_score_is_scored_by_magnitude(tmp_path):
+    """A 6-sigma DROP must be CRITICAL — signed scores previously fell below
+    every one-sided threshold and buried downside breaks at (INFO, ~0)."""
+    cls = _make_flagging_check("fake_stl_neg", "stl_residual", details={"z_score": -6.0})
+    orch = DetectionOrchestrator().add_single(cls())
+    findings = orch.run(
+        sources={"src": _source()}, output_dir=tmp_path, run_id="negz"
+    )
+    assert findings[0].issue.severity is Severity.CRITICAL
+    assert findings[0].issue.confidence > 0.9
+
+
+def test_failed_source_emits_critical_finding(tmp_path):
+    """An unreadable source is an incident, not a silent 'all clear'."""
+    from lens.io.base import DataSource
+
+    class _DeadSource(DataSource):
+        def read(self):
+            raise OSError("connection refused")
+
+        def read_snapshot(self, snapshot_date):
+            raise OSError("connection refused")
+
+        def read_history(self, entity_id):
+            raise OSError("connection refused")
+
+    orch = DetectionOrchestrator().add_single("null_check", fields=["status"])
+    findings = orch.run(
+        sources={"good": _source(), "dead": _DeadSource()},
+        output_dir=tmp_path,
+        run_id="deadsrc",
+    )
+    unavailable = [f for f in findings if f.issue.check_name == "source_unavailable"]
+    assert len(unavailable) == 1
+    assert unavailable[0].issue.severity is Severity.CRITICAL
+    assert unavailable[0].issue.field_name == "dead"
+    assert "connection refused" in unavailable[0].issue.description
+    # The healthy source's checks still ran.
+    assert any(f.issue.check_name == "null_check" for f in findings)
+
+
+def test_no_boost_across_different_sources(tmp_path):
+    """Two families flagging the same (entity, field, date) in DIFFERENT
+    tables looked at different data — that is not corroboration."""
+    a = _make_flagging_check("fake_stl3", "stl_residual", details={"z_score": 3.5})
+    b = _make_flagging_check("fake_tabpfn2", "tabpfn_anomaly", details={"score": 3.5})
+    orch = (
+        DetectionOrchestrator()
+        .add_single(a(), sources=["src_one"])
+        .add_single(b(), sources=["src_two"])
+    )
+    findings = orch.run(
+        sources={"src_one": _source(), "src_two": _source()},
+        output_dir=tmp_path,
+        run_id="xsrc",
+    )
+    assert len(findings) == 1
+    f = findings[0]
+    assert "agreement_boost" not in (f.issue.details or {})
+    # But the merge across tables is recorded.
+    assert f.issue.details.get("sources") == ["src_one", "src_two"]
+
+
+def test_boost_with_cross_source_detector(tmp_path):
+    """A cross-source detector (no __source__) corroborates any source."""
+
+    class _FakeCross(BaseCheck):
+        name = "fake_cross"
+        description = "test"
+        default_severity = Severity.WARNING
+
+        def run(self, data, *, entity_col="entity_id", snapshot_col="snapshot_date"):
+            return CheckResult(check_name=self.name, passed=True)
+
+        def run_cross(self, sources, *, wiki, entity_col, snapshot_col):
+            issue = Issue(
+                check_name=self.name,
+                severity=Severity.WARNING,
+                entity_id="a",
+                field_name="balance",
+                snapshot_date=SNAP,
+                confidence=0.5,
+                detector_source="cross_source_wiki:rule_x",
+                details={"diff": 0.06},
+            )
+            return CheckResult(check_name=self.name, passed=False, issues=[issue])
+
+    single = _make_flagging_check("fake_stl4", "stl_residual", details={"z_score": 3.5})
+    orch = DetectionOrchestrator().add_single(single()).add_cross(_FakeCross())
+    findings = orch.run(
+        sources={"src": _source()}, output_dir=tmp_path, run_id="crossboost"
+    )
+    assert len(findings) == 1
+    boost = findings[0].issue.details.get("agreement_boost")
+    assert boost is not None
+    assert sorted(boost["families"]) == ["cross_source_wiki", "stl_residual"]
+
+
 # Register the dynamic classes once at import so registry.create-by-name in
 # other tests is unaffected (we pass instances directly above).
 _ = registry

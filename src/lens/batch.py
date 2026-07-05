@@ -33,6 +33,7 @@ real prefix caching would require the Anthropic SDK, which ADR 0002 rejects.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -72,12 +73,18 @@ class BatchResult:
     total_cost_usd: float = 0.0
     total_input_tokens: int = 0
     total_output_tokens: int = 0
+    # False when at least one fresh investigation reported no cost estimate
+    # (non-Claude client, or the CLI envelope didn't parse) — the brief then
+    # shows "n/a" instead of a misleading "$0.00". Zero fresh investigations
+    # is genuinely $0 of new spend, so the flag stays True.
+    cost_known: bool = True
 
     @property
-    def cost_summary(self) -> dict[str, float | int]:
+    def cost_summary(self) -> dict[str, float | int | bool]:
         """Compact run-cost dict for the brief / digest / CLI summary."""
         return {
             "total_cost_usd": self.total_cost_usd,
+            "cost_known": self.cost_known,
             "input_tokens": self.total_input_tokens,
             "output_tokens": self.total_output_tokens,
             "investigated": self.rca_groups_investigated,
@@ -137,13 +144,28 @@ def _prior_run_id(prior_findings: Path | None) -> str | None:
 
 
 def _group_for_rca(findings: list[Finding]) -> dict[tuple[str, str], list[Finding]]:
-    """Bucket non-suppressed findings into Finding Groups (ADR 0003)."""
+    """Bucket non-suppressed findings into Finding Groups (ADR 0003).
+
+    ``source_unavailable`` findings are excluded: an infra outage needs no
+    LLM investigation (the description IS the diagnosis), and as CRITICAL /
+    confidence-1.0 findings they would otherwise sort first and consume the
+    capped investigation slots ahead of real data findings.
+    """
     groups: dict[tuple[str, str], list[Finding]] = {}
     for f in findings:
         if is_suppressed(f):
             continue
+        if f.issue.check_name == "source_unavailable":
+            continue
         groups.setdefault(finding_group_key(f), []).append(f)
     return groups
+
+
+def _is_failed_rca(rca: RCAResult) -> bool:
+    """True for the failure marker :meth:`RCAAgent.investigate` returns when
+    the LLM call itself raised — confidence 0 and an error-prefixed
+    hypothesis. Never worth reusing across runs."""
+    return rca.confidence == 0.0 and rca.hypothesis.startswith("LLM call failed")
 
 
 def _group_representative(members: list[Finding]) -> Finding:
@@ -181,15 +203,26 @@ def run_batch(
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
     prior_findings = _prior_findings_target(cfg.output_dir)
 
-    # Materialize sources once; the same LazyFrames feed detection and RCA
-    # row sampling.
-    lazy_sources: dict[str, pl.LazyFrame] = {
-        name: _materialize_source(src) for name, src in cfg.sources.items()
-    }
+    # Materialize sources ONCE; the same handles feed both detection and RCA
+    # row sampling (a Snowflake source downloads a single time per run). A
+    # source that fails here is passed through raw so the orchestrator's own
+    # attempt turns the failure into a CRITICAL source_unavailable finding —
+    # never a silent skip.
+    lazy_sources: dict[str, pl.LazyFrame] = {}
+    for name, src in cfg.sources.items():
+        try:
+            lazy_sources[name] = _materialize_source(src)
+        except Exception as exc:  # noqa: BLE001 - orchestrator flags it
+            logger.exception(
+                "batch: failed to materialize source %r for RCA sampling: %s",
+                name,
+                exc,
+            )
+    orch_sources: dict = {name: lazy_sources.get(name, src) for name, src in cfg.sources.items()}
 
     orch = _build_orchestrator(cfg)
     findings = orch.run(
-        sources=dict(lazy_sources),
+        sources=orch_sources,
         wiki_root=cfg.wiki_root,
         output_dir=cfg.output_dir,
         run_id=run_id,
@@ -256,9 +289,24 @@ def run_batch(
         )
 
         # Reuse first (free), so the investigation cap only bounds NEW calls.
+        # Match on ANY member's finding_id, not just the representative's —
+        # the rep churns when a new entity joins the group with higher
+        # severity, and that must not force a re-investigation of the same
+        # ongoing incident.
         fresh: list[tuple[tuple[str, str], list[Finding], Finding]] = []
         for key, members, rep in eligible:
-            reused = prior_rcas.get(rep.finding_id)
+            reused: RCAResult | None = None
+            for member in members:
+                prior = prior_rcas.get(member.finding_id)
+                if prior is not None and _is_failed_rca(prior):
+                    # A persisted "LLM call failed" marker (auth expiry, rate
+                    # limit during a prior run) is not a hypothesis — reusing
+                    # it would render the error banner as the root cause
+                    # forever. Re-investigate instead.
+                    continue
+                if prior is not None:
+                    reused = dataclasses.replace(prior, reused_from=prior.finding_id)
+                    break
             if reused is not None:
                 _agent_for(cfg.rca.model).save(reused, actual_run_id)
                 for member in members:
@@ -286,21 +334,32 @@ def run_batch(
                     sample_rows=cfg.rca.sample_rows,
                     max_commits=cfg.rca.max_commits,
                 )
-                rca.model = model_used
-                agent.save(rca, actual_run_id)
             except Exception as exc:  # noqa: BLE001 - one bad group must not kill the brief
                 logger.exception("batch: RCA failed for group %s: %s", key, exc)
                 continue
+            rca.model = model_used
             result.rca_groups_investigated += 1
             # Accumulate this run's NEW spend (reused groups are not counted —
-            # they cost nothing this run).
-            result.total_cost_usd += rca.cost_usd or 0.0
+            # they cost nothing this run) BEFORE persistence: the LLM call
+            # already happened, so a failed save must not erase the spend.
+            # A None cost means the client reported no estimate — that makes
+            # the run total unknown, not $0.
+            if rca.cost_usd is None:
+                result.cost_known = False
+            else:
+                result.total_cost_usd += rca.cost_usd
             result.total_input_tokens += rca.input_tokens or 0
             result.total_output_tokens += rca.output_tokens or 0
             # The group shares one hypothesis — attach it to every member so
             # each brief card can render it.
             for member in members:
                 result.rcas[member.finding_id] = rca
+            try:
+                agent.save(rca, actual_run_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "batch: failed to persist RCA for group %s: %s", key, exc
+                )
 
     # --- brief ------------------------------------------------------------
     brief_path = cfg.output_dir / f"brief.{actual_run_id}.html"

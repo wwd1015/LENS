@@ -52,8 +52,15 @@ def load_suite(config_path: str | Path) -> Suite:
         snapshot_col=cfg.get("snapshot_col", "snapshot_date"),
     )
 
-    for check_cfg in cfg.get("checks", []):
-        params = check_cfg.get("params", {})
+    for idx, check_cfg in enumerate(cfg.get("checks", [])):
+        if not isinstance(check_cfg, dict) or "name" not in check_cfg:
+            raise ValueError(
+                f"{path}: checks[{idx}] must be a mapping with a 'name' key, "
+                f"got {check_cfg!r}"
+            )
+        # Copy — mutating the YAML-parsed dict in place would alias state
+        # back into the caller's config object.
+        params = dict(check_cfg.get("params", {}) or {})
         if "severity" in check_cfg:
             params["severity"] = Severity(check_cfg["severity"])
         suite.add(check_cfg["name"], **params)

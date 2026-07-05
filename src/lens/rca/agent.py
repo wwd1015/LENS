@@ -162,17 +162,13 @@ def _sample_rows(
     have_snapshot = snapshot_col in cols
     have_entity = entity_col in cols and entity_id is not None
 
-    # Push filters BEFORE materialization. The anomalous and contrast slices
-    # each materialize at most `n` rows.
+    # Push every predicate AND the row limit into the LazyFrame — each slice
+    # below materializes at most `n` rows. Portfolio-level findings (no
+    # entity_id) previously collected the entire table here, an OOM/latency
+    # hazard on production-sized sources.
     base = lf
     if have_entity:
         base = base.filter(pl.col(entity_col) == entity_id)
-
-    try:
-        df = base.collect()
-    except Exception as exc:  # noqa: BLE001 - best-effort sampling
-        logger.debug("rca: could not materialize filtered source: %s", exc)
-        return [], []
 
     anomalous: list[dict[str, Any]] = []
     contrast: list[dict[str, Any]] = []
@@ -180,25 +176,25 @@ def _sample_rows(
     # Anomalous rows: at the snapshot date.
     try:
         if have_snapshot and snapshot_date is not None:
-            mask = pl.col(snapshot_col) == snapshot_date
-            if have_entity:
-                mask = mask & (pl.col(entity_col) == entity_id)
-            anomalous_df = df.filter(mask).head(n)
-            anomalous = anomalous_df.to_dicts()
+            anomalous = (
+                base.filter(pl.col(snapshot_col) == snapshot_date).head(n).collect().to_dicts()
+            )
     except Exception as exc:  # noqa: BLE001
         logger.debug("rca: anomalous-row sampling failed: %s", exc)
 
     # Contrast rows: prior snapshots for the same entity.
     try:
         if have_snapshot and snapshot_date is not None:
-            mask = pl.col(snapshot_col) < snapshot_date
-            if have_entity:
-                mask = mask & (pl.col(entity_col) == entity_id)
-            contrast_df = df.filter(mask).sort(snapshot_col, descending=True).head(n)
-            contrast = contrast_df.to_dicts()
+            contrast = (
+                base.filter(pl.col(snapshot_col) < snapshot_date)
+                .sort(snapshot_col, descending=True)
+                .head(n)
+                .collect()
+                .to_dicts()
+            )
         elif have_entity:
             # No snapshot column → fall back to other rows for the entity.
-            contrast = df.filter(pl.col(entity_col) == entity_id).head(n).to_dicts()
+            contrast = base.head(n).collect().to_dicts()
     except Exception as exc:  # noqa: BLE001
         logger.debug("rca: contrast-row sampling failed: %s", exc)
 

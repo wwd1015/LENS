@@ -547,17 +547,26 @@ def render_brief(
 
     suppressed_views = [_finding_view(f, rcas) for f in sorted(suppressed_findings, key=_sort_key)]
 
-    # Delta vs. prior — None when no prior path was given.
+    # Delta vs. prior — None when no prior path was given. Computed over the
+    # FULL findings list (pre-cap, including feedback-suppressed): a finding
+    # that was suppressed or capped out of the visible set is still open, and
+    # must not be reported as "cleared up".
     prior_ids = _read_prior_finding_ids(prior_findings_path)
-    delta_counts = _compute_delta(visible_findings, prior_ids)
+    delta_counts = _compute_delta(findings, prior_ids)
 
     summary_counts = _summary_counts(visible_findings)
 
     # Run-cost readout — only when the run actually did (or reused) RCA work.
     cost_view: dict[str, Any] | None = None
     if cost_summary and (cost_summary.get("investigated") or cost_summary.get("reused")):
+        # cost_known=False means the client reported no estimate for at least
+        # one investigation — render "n/a", never a misleading "$0.00".
         cost_view = {
-            "total_usd": _fmt_usd(cost_summary.get("total_cost_usd") or 0.0),
+            "total_usd": (
+                _fmt_usd(cost_summary.get("total_cost_usd") or 0.0)
+                if cost_summary.get("cost_known", True)
+                else "n/a"
+            ),
             "input_tokens": f"{int(cost_summary.get('input_tokens') or 0):,}",
             "output_tokens": f"{int(cost_summary.get('output_tokens') or 0):,}",
             "investigated": int(cost_summary.get("investigated") or 0),

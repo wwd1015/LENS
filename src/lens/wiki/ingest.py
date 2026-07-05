@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import secrets
 import shutil
 import subprocess
 import time
@@ -50,11 +52,12 @@ class CallCost:
     bundled price table), not authoritative billing — which is exactly the
     right granularity for tracking per-run spend. We deliberately read the
     number the CLI already computes rather than maintain our own price table.
-    A zero-filled instance is the graceful-degradation value when the CLI did
-    not return parseable JSON.
+    ``cost_usd=None`` means the CLI reported no estimate (unparseable stdout,
+    or an envelope with no ``total_cost_usd``) — "unknown", NOT $0.00; the
+    batch surfaces it as "n/a".
     """
 
-    cost_usd: float = 0.0
+    cost_usd: float | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_input_tokens: int = 0
@@ -68,11 +71,18 @@ def _coerce_int(value: Any) -> int:
         return 0
 
 
-def _coerce_float(value: Any) -> float:
+def _coerce_opt_float(value: Any) -> float | None:
+    """Coerce to float, or ``None`` when absent/uncoercible — cost is then
+    reported as unknown rather than a fabricated $0.00."""
     try:
         return float(value)
     except (TypeError, ValueError):
-        return 0.0
+        return None
+
+
+class ClaudeCodeUnavailableError(RuntimeError):
+    """The `claude` binary is not available — a configuration problem, not a
+    transient LLM failure. Never worth retrying."""
 
 
 def _parse_claude_json(stdout: str) -> tuple[str, CallCost]:
@@ -82,6 +92,10 @@ def _parse_claude_json(stdout: str) -> tuple[str, CallCost]:
     CLI emitting plain text, an error banner, or a future format change), the
     raw stdout is returned as the completion text with a zero-cost record — the
     caller still gets a usable string and never crashes on cost accounting.
+
+    An envelope with ``is_error`` set raises instead: the ``result`` text is an
+    error banner (auth expiry, rate limit), and returning it as the completion
+    would render "Invalid API key…" as an RCA hypothesis.
     """
     try:
         payload = json.loads(stdout)
@@ -89,6 +103,11 @@ def _parse_claude_json(stdout: str) -> tuple[str, CallCost]:
         return stdout, CallCost()
     if not isinstance(payload, dict):
         return stdout, CallCost()
+
+    if payload.get("is_error"):
+        raise RuntimeError(
+            f"claude headless call reported an error: {payload.get('result')!r}"
+        )
 
     # `result` carries the model's text; `structured_output` is used instead
     # when the call was made with --json-schema (we don't, but stay robust).
@@ -101,7 +120,7 @@ def _parse_claude_json(stdout: str) -> tuple[str, CallCost]:
     usage = payload.get("usage")
     usage = usage if isinstance(usage, dict) else {}
     cost = CallCost(
-        cost_usd=_coerce_float(payload.get("total_cost_usd")),
+        cost_usd=_coerce_opt_float(payload.get("total_cost_usd")),
         input_tokens=_coerce_int(usage.get("input_tokens")),
         output_tokens=_coerce_int(usage.get("output_tokens")),
         cache_read_input_tokens=_coerce_int(usage.get("cache_read_input_tokens")),
@@ -152,23 +171,32 @@ class ClaudeCodeClient:
 
     @property
     def total_cost_usd(self) -> float:
-        """Sum of every recorded call's estimated cost this client made."""
-        return sum(c.cost_usd for c in self.calls)
+        """Sum of every recorded call's estimated cost this client made.
+
+        Calls with no reported estimate (``cost_usd=None``) contribute 0 to
+        the sum — the total is then a lower bound.
+        """
+        return sum(c.cost_usd or 0.0 for c in self.calls)
 
     def complete(self, prompt: str) -> str:
-        cmd = [self.executable, "-p", prompt, "--output-format", "json"]
+        # The prompt goes over stdin, never argv: a big RCA/ingest prompt
+        # would blow Linux's ~128 KiB per-argument ceiling (OSError E2BIG),
+        # and argv is world-readable via /proc/<pid>/cmdline — lending data
+        # rows must not sit in the process listing for the call's duration.
+        cmd = [self.executable, "-p", "--output-format", "json"]
         if self.extra_args:
             cmd.extend(self.extra_args)
         try:
             result = subprocess.run(
                 cmd,
+                input=prompt,
                 capture_output=True,
                 text=True,
                 timeout=self.timeout_s,
                 check=True,
             )
         except FileNotFoundError as e:
-            raise RuntimeError(
+            raise ClaudeCodeUnavailableError(
                 f"`{self.executable}` not on PATH; install Claude Code or set "
                 f"`executable=` on ClaudeCodeClient"
             ) from e
@@ -178,6 +206,8 @@ class ClaudeCodeClient:
             ) from e
         except subprocess.TimeoutExpired as e:
             raise RuntimeError(f"claude headless run timed out after {self.timeout_s}s") from e
+        except OSError as e:
+            raise RuntimeError(f"claude headless run failed to launch: {e}") from e
         text, cost = _parse_claude_json(result.stdout)
         self.calls.append(cost)
         self.last_call = cost
@@ -226,6 +256,32 @@ class _TransientIngestError(Exception):
     extracted page is missing required fields. Triggers a retry."""
 
 
+_PROVENANCE_FILENAME = ".provenance.json"
+
+
+def _load_provenance(rules_dir: Path) -> dict[str, str]:
+    """Read the slug → source-key map recording which ingest owns each page."""
+    path = rules_dir / _PROVENANCE_FILENAME
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+
+
+def _save_provenance(rules_dir: Path, provenance: dict[str, str]) -> None:
+    """Persist the ownership map atomically (tmp + os.replace).
+
+    This sidecar is the security control against prompt-injected slug
+    collisions — a truncated write must not silently erase every ownership
+    lock (``_load_provenance`` degrades a corrupt file to ``{}``).
+    """
+    path = rules_dir / _PROVENANCE_FILENAME
+    tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{secrets.token_hex(4)}")
+    tmp.write_text(json.dumps(provenance, indent=2, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, path)
+
+
 class IngestionWorker:
     """Drives the LLM-based rule-page extraction pipeline.
 
@@ -258,6 +314,20 @@ class IngestionWorker:
         self.wiki_root = Path(wiki_root)
         self.client = client if client is not None else ClaudeCodeClient()
         self.max_retries = max_retries
+
+    def _source_key_part(self, p: Path | str) -> str:
+        """One code path's contribution to the provenance ownership key.
+
+        Repo-root-relative when possible so a checkout at a different
+        absolute path (CI runner vs laptop) still owns its pages — an
+        absolute key would silently refuse every legitimate re-ingest after
+        a repo move, freezing the rule at its old equation forever.
+        """
+        resolved = Path(p).resolve()
+        try:
+            return str(resolved.relative_to(self.repo_root.resolve()))
+        except ValueError:
+            return str(resolved)
 
     def _read_schema_example(self) -> str:
         schema_path = self.wiki_root / SCHEMA_EXAMPLE_RELPATH
@@ -296,6 +366,10 @@ class IngestionWorker:
                 if not lhs.get("table"):
                     raise _TransientIngestError("response missing equation.lhs.table")
                 return page, fm, raw
+            except ClaudeCodeUnavailableError:
+                # Configuration problem — retrying would just burn
+                # max_retries × timeout waiting for a binary to appear.
+                raise
             except Exception as e:  # noqa: BLE001 — retry on anything LLM-side
                 last_exc = e
                 logger.warning(
@@ -367,7 +441,33 @@ class IngestionWorker:
         rules_dir = self.wiki_root / "rules"
         rules_dir.mkdir(parents=True, exist_ok=True)
         out_path = rules_dir / f"{slug}.md"
+
+        # Overwrite guard: the slug comes from LLM-extracted frontmatter, so
+        # a hostile comment in an ingested source file could otherwise name
+        # its output after another rule's page and silently replace it
+        # (prompt-injection → persistent detection bypass). Ownership is
+        # tracked in a provenance sidecar: once a slug is recorded as coming
+        # from a set of source paths, only a re-ingest of the SAME sources
+        # may overwrite it. Pages that predate the sidecar are adopted (and
+        # locked) by the first ingest that touches them — hand-authored
+        # pages are protected only after that first adoption; git review of
+        # wiki diffs is the backstop for the first write.
+        source_key = "|".join(sorted(self._source_key_part(p) for p in code_paths))
+        provenance = _load_provenance(rules_dir)
+        owner = provenance.get(slug)
+        if out_path.exists() and owner is not None and owner != source_key:
+            logger.warning(
+                "ingestion refused: dataset=%s extracted name %r collides with "
+                "existing page %s owned by a different source; not overwriting",
+                dataset_name,
+                name,
+                out_path,
+            )
+            return []
+
         out_path.write_text(page)
+        provenance[slug] = source_key
+        _save_provenance(rules_dir, provenance)
         logger.info("wrote %s", out_path)
         return [out_path]
 

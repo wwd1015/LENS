@@ -11,7 +11,6 @@ from lens.checks.drill_down import HierarchicalDrillDownCheck
 from lens.checks.registry import registry
 from lens.types import Severity
 
-
 # ---------------------------------------------------------------- fixtures
 
 
@@ -203,7 +202,10 @@ def test_single_segment_anomaly_emits_segment_leaf():
         and iss.details["segment_path"][0]["value"] == "A"
         and iss.details["segment_path"][1]["value"] == "2024Q3"
         for iss in leaves
-    ), f"expected depth-2 leaf at A/2024Q3; got {[(iss.details['depth'], iss.details['segment_path']) for iss in leaves]}"
+    ), (
+        "expected depth-2 leaf at A/2024Q3; got "
+        f"{[(i.details['depth'], i.details['segment_path']) for i in leaves]}"
+    )
 
 
 def test_no_anomalous_descendant_emits_parent():
@@ -267,7 +269,10 @@ def test_no_anomalous_descendant_emits_parent():
         iss.details["depth"] == 1
         and iss.details["segment_path"][0]["value"] == "A"
         for iss in leaves_on_target
-    ), f"expected asset_class=A at depth 1; got {[(iss.details['depth'], iss.details['segment_path']) for iss in leaves_on_target]}"
+    ), (
+        "expected asset_class=A at depth 1; got "
+        f"{[(i.details['depth'], i.details['segment_path']) for i in leaves_on_target]}"
+    )
 
 
 def test_constant_series_is_skipped():
@@ -457,9 +462,9 @@ def test_zero_segments_runs_portfolio_only():
 
 def test_runs_through_orchestrator():
     """End-to-end: orchestrator wires the detector via add_single."""
-    from lens.orchestrator import DetectionOrchestrator
-
     import numpy as np
+
+    from lens.orchestrator import DetectionOrchestrator
 
     rng = np.random.default_rng(99)
     df = _baseline_panel()

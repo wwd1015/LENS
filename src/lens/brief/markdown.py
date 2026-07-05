@@ -91,13 +91,28 @@ def _first_http_reference(refs: list[str] | None) -> str | None:
     return None
 
 
+def _sanitize_hypothesis(text: str) -> str:
+    """Flatten LLM-authored hypothesis text for safe one-line interpolation.
+
+    The hypothesis is model output built partly from row data and commit
+    subjects — a newline or markdown marker in it could fabricate extra
+    digest lines or break the list structure. Collapse all whitespace runs
+    and escape the markdown characters the digest itself uses.
+    """
+    flattened = " ".join(text.split())
+    for ch in ("`", "*", "_"):
+        flattened = flattened.replace(ch, "\\" + ch)
+    return flattened
+
+
 def _truncate_hypothesis(text: str) -> str:
-    """Trim hypothesis text to fit on one summary line.
+    """Sanitize + trim hypothesis text to fit on one summary line.
 
     If the text already fits, return it unchanged. Otherwise cut to
     ``_HYPOTHESIS_MAX_CHARS`` and append a single horizontal-ellipsis (the
     spec literally specifies the trailing ``…`` character, not three dots).
     """
+    text = _sanitize_hypothesis(text)
     if len(text) <= _HYPOTHESIS_MAX_CHARS:
         return text
     return text[:_HYPOTHESIS_MAX_CHARS] + "…"
@@ -116,8 +131,13 @@ def _format_cost_footer(cost_summary: dict[str, Any] | None) -> str | None:
     reused = int(cost_summary.get("reused") or 0)
     if not (investigated or reused):
         return None
-    total = float(cost_summary.get("total_cost_usd") or 0.0)
-    usd = f"${total:,.2f}" if total >= 1 else f"${total:.4f}"
+    if cost_summary.get("cost_known", True):
+        total = float(cost_summary.get("total_cost_usd") or 0.0)
+        usd = f"${total:,.2f}" if total >= 1 else f"${total:.4f}"
+    else:
+        # At least one investigation carried no cost estimate — the total is
+        # unknown, not $0.
+        usd = "n/a"
     detail = f"{investigated} investigated"
     if reused:
         detail += f", {reused} reused free"
@@ -295,6 +315,7 @@ def _load_rcas(rca_dir: Path) -> dict[str, RCAResult]:
                 return None
 
         model = payload.get("model")
+        reused_from = payload.get("reused_from")
         rcas[finding_id] = RCAResult(
             finding_id=finding_id,
             hypothesis=payload.get("hypothesis", ""),
@@ -305,6 +326,7 @@ def _load_rcas(rca_dir: Path) -> dict[str, RCAResult]:
             input_tokens=_opt_int(payload.get("input_tokens")),
             output_tokens=_opt_int(payload.get("output_tokens")),
             model=str(model) if model is not None else None,
+            reused_from=str(reused_from) if reused_from is not None else None,
         )
     return rcas
 
